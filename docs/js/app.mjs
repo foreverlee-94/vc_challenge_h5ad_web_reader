@@ -213,6 +213,8 @@ function setTab(name) {
   state.tab = name;
   for (const [k, sec] of Object.entries(tabs)) sec.hidden = k !== name;
   for (const b of topnav.querySelectorAll("button")) b.classList.toggle("active", b.dataset.tab === name);
+  // tables measured while the pane was hidden couldn't size their columns; retry now
+  if (name === "explore") requestAnimationFrame(() => enhanceIn(detailEl));
 }
 
 function buildOverviewTab(info, ms) {
@@ -1183,9 +1185,12 @@ function enhanceResizable(table) {
   });
 }
 
-const rzObserver = new MutationObserver(() => {
-  for (const t of detailEl.querySelectorAll("table.freq:not([data-rz]), table.kv:not([data-rz])")) enhanceResizable(t);
-});
+const RZ_SEL = "table.freq:not([data-rz]), table.kv:not([data-rz])";
+function enhanceIn(root) {
+  if (!root) return;
+  for (const t of root.querySelectorAll(RZ_SEL)) enhanceResizable(t);
+}
+const rzObserver = new MutationObserver(() => enhanceIn(detailEl));
 rzObserver.observe(detailEl, { childList: true, subtree: true });
 
 setStatus("", "info");

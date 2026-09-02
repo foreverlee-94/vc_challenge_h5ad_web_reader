@@ -220,8 +220,8 @@ ul.unstree details > summary { cursor: pointer; }
 
 #explore-body {
   display: flex;
-  align-items: stretch;
-  border-top: 1px solid var(--line);
+  align-items: flex-start;
+  gap: 4px;
 }
 #miller {
   flex: 0 0 auto;
@@ -230,9 +230,7 @@ ul.unstree details > summary { cursor: pointer; }
   display: flex;
   overflow-x: auto;
   scroll-snap-type: x proximity;
-  background: var(--card);
   border-right: 1px solid var(--line);
-  min-height: 260px;
   max-height: 78vh;
 }
 .mcol {
@@ -334,12 +332,13 @@ table.freq td.n, table.freq th.n { text-align: right; font-family: var(--mono); 
 .tablescroll { overflow: auto; border: 1px solid var(--line); border-radius: 8px; max-height: 480px; }
 .tablescroll table.freq { border: 0; }
 
-/* detail pane: don't stretch few-column tables; let columns fit content,
-   and allow drag-to-resize on the column dividers */
+/* detail pane: value tables fit their content (not the full pane width) and
+   carry drag-to-resize dividers on the column headers */
 #detail table.freq, #detail table.kv { width: auto; max-width: 100%; }
 #detail .tablescroll { width: fit-content; max-width: 100%; }
-#detail table.rz { table-layout: fixed; }
-#detail table.rz td, #detail table.rz th { overflow: hidden; text-overflow: ellipsis; word-break: break-word; }
+#detail table.kv th { width: auto; }
+table.rz { table-layout: fixed; }
+table.rz td, table.rz th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .col-grip {
   position: absolute;
   top: 0;
