@@ -1130,4 +1130,62 @@ window.addEventListener("drop", (e) => {
   if (f) handleFile(f);
 });
 
+// ---- resizable columns in the detail pane -------------------
+
+function enhanceResizable(table) {
+  if (table.dataset.rz) return;
+  const head = (table.tHead && table.tHead.rows[0]) || table.rows[0];
+  if (!head || head.cells.length < 2) return;
+  const cells = [...head.cells];
+  const widths = cells.map((c) => Math.round(c.getBoundingClientRect().width));
+  if (widths.some((w) => w < 1)) return; // not laid out yet — retry on next mutation
+  table.dataset.rz = "1";
+  table.classList.add("rz");
+  table.style.width = widths.reduce((a, b) => a + b, 0) + "px";
+  cells.forEach((th, i) => {
+    th.style.width = widths[i] + "px";
+    if (getComputedStyle(th).position === "static") th.style.position = "relative";
+    if (i === cells.length - 1) return;
+    const grip = document.createElement("span");
+    grip.className = "col-grip";
+    grip.title = "드래그하여 열 너비 조절";
+    grip.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const x0 = e.clientX;
+      const w0 = th.getBoundingClientRect().width;
+      try {
+        grip.setPointerCapture(e.pointerId);
+      } catch (_) {}
+      document.body.classList.add("col-resizing");
+      const move = (ev) => {
+        th.style.width = Math.max(44, Math.round(w0 + ev.clientX - x0)) + "px";
+        table.style.width = cells.reduce((a, c) => a + c.getBoundingClientRect().width, 0) + "px";
+      };
+      const up = () => {
+        document.removeEventListener("pointermove", move);
+        document.removeEventListener("pointerup", up);
+        document.body.classList.remove("col-resizing");
+      };
+      document.addEventListener("pointermove", move);
+      document.addEventListener("pointerup", up);
+    });
+    grip.addEventListener("dblclick", () => {
+      th.style.width = "";
+      table.style.tableLayout = "auto";
+      requestAnimationFrame(() => {
+        cells.forEach((c) => (c.style.width = Math.round(c.getBoundingClientRect().width) + "px"));
+        table.style.tableLayout = "fixed";
+        table.style.width = cells.reduce((a, c) => a + c.getBoundingClientRect().width, 0) + "px";
+      });
+    });
+    th.appendChild(grip);
+  });
+}
+
+const rzObserver = new MutationObserver(() => {
+  for (const t of detailEl.querySelectorAll("table.freq:not([data-rz]), table.kv:not([data-rz])")) enhanceResizable(t);
+});
+rzObserver.observe(detailEl, { childList: true, subtree: true });
+
 setStatus("", "info");

@@ -333,6 +333,36 @@ table.freq td.n, table.freq th.n { text-align: right; font-family: var(--mono); 
 
 .tablescroll { overflow: auto; border: 1px solid var(--line); border-radius: 8px; max-height: 480px; }
 .tablescroll table.freq { border: 0; }
+
+/* detail pane: don't stretch few-column tables; let columns fit content,
+   and allow drag-to-resize on the column dividers */
+#detail table.freq, #detail table.kv { width: auto; max-width: 100%; }
+#detail .tablescroll { width: fit-content; max-width: 100%; }
+#detail table.rz { table-layout: fixed; }
+#detail table.rz td, #detail table.rz th { overflow: hidden; text-overflow: ellipsis; word-break: break-word; }
+.col-grip {
+  position: absolute;
+  top: 0;
+  right: -5px;
+  width: 11px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 6;
+  touch-action: none;
+}
+.col-grip::after {
+  content: "";
+  position: absolute;
+  top: 18%;
+  bottom: 18%;
+  left: 4px;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+}
+.col-grip:hover::after,
+body.col-resizing .col-grip::after { background: var(--accent); }
+body.col-resizing { cursor: col-resize; user-select: none; }
 table.matrix { border-collapse: collapse; font-size: 12px; font-family: var(--mono); }
 table.matrix th { position: sticky; background: var(--card); font-weight: 600; padding: 4px 8px; border: 1px solid var(--line); white-space: nowrap; }
 table.matrix thead th { top: 0; z-index: 2; }
