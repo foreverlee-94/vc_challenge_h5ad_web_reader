@@ -1,2 +1,0 @@
-[26640:5764:0902/144459.199:ERROR:services\network\public\cpp\is_potentially_trustworthy.cc:189] Allowlisted secure origin pattern 210.* is not valid; ignoring.
-[26640:5764:0902/144459.199:ERROR:chrome\browser\ssl\secure_origin_prefs_observer.cc:50] The 'unsafely_treat_insecure_origin_as_secure' preference or policy contained invalid values (they have been ignored): 210.*

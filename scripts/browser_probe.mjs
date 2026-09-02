@@ -84,15 +84,32 @@ ws.onmessage = (ev) => {
 await cmd("Runtime.enable");
 await cmd("Log.enable");
 await cmd("Page.enable");
+await cmd("DOM.enable");
 
-console.log(`opened ${url} ; waiting ${waitMs}ms`);
-await sleep(waitMs);
+const setFile = process.env.SETFILE;
+console.log(`opened ${url} ; waiting ${waitMs}ms` + (setFile ? ` ; will set #file=${setFile}` : ""));
 
-const r = await cmd("Runtime.evaluate", {
-  expression: "(document.getElementById('log')||document.body).textContent",
-  returnByValue: true,
-});
-console.log("\n===== #log =====\n" + (r?.result?.value ?? "(nothing)"));
+if (setFile) {
+  await sleep(3000);
+  const { root } = await cmd("DOM.getDocument", { depth: -1 });
+  const { nodeId } = await cmd("DOM.querySelector", { nodeId: root.nodeId, selector: "#file" });
+  await cmd("DOM.setFileInputFiles", { files: [setFile.replace(/\//g, "\\")], nodeId });
+  console.log("  set #file input");
+  await sleep(waitMs - 3000);
+} else {
+  await sleep(waitMs);
+}
+
+const dump = async (sel) => {
+  const r = await cmd("Runtime.evaluate", {
+    expression: `(document.querySelector(${JSON.stringify(sel)})||{}).textContent || "(no ${sel})"`,
+    returnByValue: true,
+  });
+  return r?.result?.value ?? "(nothing)";
+};
+console.log("\n===== #log =====\n" + (await dump("#log")));
+console.log("\n===== #status =====\n" + (await dump("#status")));
+console.log("\n===== #report =====\n" + (await dump("#report")));
 
 ws.close();
 chrome.kill();

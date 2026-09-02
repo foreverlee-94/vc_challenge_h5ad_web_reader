@@ -1,27 +1,86 @@
 // UI controller (main thread).
 // Phase 1: pick a file, show a plain-language semantic overview + the raw
 // HDF5 tree (collapsed, "advanced"). Dropdown-driven per-item views: Phase 3.
+//
+// Reading engine: a module Web Worker (h5wasm + WORKERFS, lazy IO). If the
+// worker can't boot (older browsers, blocked module workers), we transparently
+// fall back to a main-thread engine that loads the file into memory.
 
-const worker = new Worker(new URL("./worker.mjs", import.meta.url), { type: "module" });
+let enginePromise = null;
 
-let seq = 0;
-const pending = new Map();
+function makeWorkerEngine() {
+  return new Promise((resolve) => {
+    let worker;
+    try {
+      worker = new Worker(new URL("./worker.mjs", import.meta.url), { type: "module" });
+    } catch (_) {
+      return resolve(null);
+    }
+    const pending = new Map();
+    let seq = 0;
+    let booted = false;
+    const bootTimer = setTimeout(() => {
+      if (!booted) {
+        try {
+          worker.terminate();
+        } catch (_) {}
+        resolve(null);
+      }
+    }, 8000);
 
-worker.onmessage = (ev) => {
-  const { id, ok, result, error } = ev.data || {};
-  if (id == null) return; // boot ping
-  const p = pending.get(id);
-  if (!p) return;
-  pending.delete(id);
-  ok ? p.resolve(result) : p.reject(new Error(error));
-};
-
-function call(type, payload, transfer = []) {
-  const id = ++seq;
-  return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
-    worker.postMessage({ id, type, payload }, transfer);
+    worker.onerror = () => {
+      if (!booted) {
+        clearTimeout(bootTimer);
+        try {
+          worker.terminate();
+        } catch (_) {}
+        resolve(null);
+      } else {
+        for (const p of pending.values()) p.rej(new Error("백그라운드 작업자 오류"));
+        pending.clear();
+      }
+    };
+    worker.onmessageerror = () => {};
+    worker.onmessage = (ev) => {
+      const d = ev.data || {};
+      if (d.boot) {
+        booted = true;
+        clearTimeout(bootTimer);
+        resolve({
+          mode: "worker",
+          open(file, onProgress) {
+            const id = ++seq;
+            return new Promise((res, rej) => {
+              pending.set(id, { res, rej, onProgress });
+              worker.postMessage({ id, type: "open", payload: { file } });
+            });
+          },
+        });
+        return;
+      }
+      const p = pending.get(d.id);
+      if (!p) return;
+      if (d.progress !== undefined) {
+        p.onProgress && p.onProgress(d.progress);
+        return;
+      }
+      pending.delete(d.id);
+      d.ok ? p.res(d.result) : p.rej(new Error((d.error || "작업자 오류").split("\n")[0]));
+    };
   });
+}
+
+async function getEngine() {
+  if (!enginePromise) {
+    enginePromise = (async () => {
+      const forceMain = new URLSearchParams(location.search).get("engine") === "main";
+      const w = forceMain ? null : await makeWorkerEngine();
+      if (w) return w;
+      const { openFileMain } = await import("./mainengine.mjs");
+      return { mode: "main", open: (file, onProgress) => openFileMain(file, onProgress) };
+    })();
+  }
+  return enginePromise;
 }
 
 // ---- DOM + formatting -------------------------------------------------
@@ -77,15 +136,16 @@ async function handleFile(file) {
   }
   reportBox.hidden = true;
   reportBox.innerHTML = "";
-  setStatus(`${file.name} (${fmtBytes(file.size)}) 여는 중…`, "info");
+  setStatus(`${file.name} (${fmtBytes(file.size)}) 준비 중…`, "info");
   const t0 = performance.now();
   try {
-    const info = await call("open", { file });
+    const eng = await getEngine();
+    const info = await eng.open(file, (msg) => setStatus(`${file.name} — ${msg}`, "info"));
     const ms = Math.round(performance.now() - t0);
     render(info, ms);
-    setStatus(`열림: ${file.name} · ${ms} ms`, "ok");
+    setStatus(`열림: ${file.name} · ${ms} ms${eng.mode === "main" ? " · 메인 스레드 모드(파일 전체 메모리 로드)" : ""}`, "ok");
   } catch (err) {
-    setStatus(`열기 실패: ${err.message}`, "error");
+    setStatus(`열기 실패: ${err && err.message ? err.message : err}`, "error");
   }
 }
 

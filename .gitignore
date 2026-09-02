@@ -21,3 +21,6 @@ Thumbs.db
 
 # Node smoke-test scratch
 scripts/in.h5ad
+
+# local scratch
+/scratchpad/
