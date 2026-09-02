@@ -4,6 +4,8 @@
 **브라우저에서 바로** 확인하는 도구. 파일은 클라이언트 사이드에서만 열리며 서버로
 전송되지 않는다. GitHub Pages 정적 호스팅.
 
+**라이브:** https://foreverlee-94.github.io/vc_challenge_h5ad_web_reader/
+
 개발 계획은 [PLAN.md](PLAN.md) 참고.
 
 ## 구조
@@ -29,13 +31,11 @@ uv run python -m http.server -d docs 8000
 
 ## GitHub Pages 배포
 
-1. 이 저장소를 GitHub에 푸시.
-2. 저장소 **Settings → Pages → Build and deployment**
-   - Source: **Deploy from a branch**
-   - Branch: **main**, 폴더: **/docs**
-3. 몇 분 뒤 `https://<사용자>.github.io/<저장소>/` 에서 접속.
+이미 설정되어 있다: Source = **Deploy from a branch**, Branch = **main** `/docs`.
+`main`에 푸시하면 1~2분 뒤 위 라이브 주소에 반영된다. 빌드 단계 없음(Actions 불필요).
 
-빌드 단계가 없으므로 Actions 설정은 필요 없다.
+처음부터 다시 설정할 때: 저장소 **Settings → Pages → Build and deployment**에서
+Source를 "Deploy from a branch", Branch를 `main` / `/docs`로 지정.
 
 ## 개발 환경 (검증용)
 
