@@ -95,7 +95,18 @@ const el = (id) => document.getElementById(id);
 const drop = el("drop");
 const fileInput = el("file");
 const statusBox = el("status");
-const reportBox = el("report");
+const picker = el("picker");
+const topnav = el("topnav");
+const filebar = el("filebar");
+const warnBox = el("warn");
+const tabs = {
+  overview: el("tab-overview"),
+  explore: el("tab-explore"),
+  raw: el("tab-raw"),
+};
+const millerEl = el("miller");
+const detailEl = el("detail");
+const breadcrumbEl = el("breadcrumb");
 
 function setStatus(msg, kind = "info") {
   statusBox.textContent = msg;
@@ -134,45 +145,94 @@ const FORMAT_KO = { csr: "CSR 희소행렬", csc: "CSC 희소행렬", dense: "�
 
 // ---- top-level flow -------------------------------------------------
 
+let openInfo = null; // { file, summary, tree } for the currently open file
+let engineMode = "worker";
+const state = { tab: "overview", path: [], view: null };
+
 async function handleFile(file) {
   if (!file) return;
   if (!/\.h5ad$|\.h5$|\.hdf5$/i.test(file.name)) {
     setStatus(`".h5ad" 파일을 선택해 주세요 (받은 파일: ${file.name})`, "warn");
     return;
   }
-  reportBox.hidden = true;
-  reportBox.innerHTML = "";
+  for (const t of Object.values(tabs)) t.hidden = true;
+  tabs.overview.innerHTML = "";
+  tabs.raw.innerHTML = "";
+  millerEl.innerHTML = "";
+  detailEl.innerHTML = "";
+  breadcrumbEl.innerHTML = "";
+  warnBox.hidden = true;
   setStatus(`${file.name} (${fmtBytes(file.size)}) 준비 중…`, "info");
   const t0 = performance.now();
   try {
     const eng = await getEngine();
+    engineMode = eng.mode;
     const info = await eng.call("open", { file }, (msg) => setStatus(`${file.name} — ${msg}`, "info"));
     const ms = Math.round(performance.now() - t0);
-    render(info, ms);
+    openInfo = info;
+    labelCache = {};
     setStatus(`열림: ${file.name} · ${ms} ms${eng.mode === "main" ? " · 메인 스레드 모드(파일 전체 메모리 로드)" : ""}`, "ok");
+    picker.hidden = true;
+    topnav.hidden = false;
+    filebar.hidden = false;
+    el("filebar-name").textContent = file.name;
+    el("filebar-meta").textContent = ` ${fmtBytes(file.size)} · ${eng.mode === "main" ? "메인 스레드" : "백그라운드 작업자"}`;
+    showWarning(file, eng.mode);
+    buildOverviewTab(info, ms);
+    buildRawTab(info.tree);
+    state.path = [];
+    state.view = null;
+    await buildExploreTab();
+    setTab(state.tab === "explore" ? "explore" : "overview");
   } catch (err) {
     setStatus(`열기 실패: ${err && err.message ? err.message : err}`, "error");
   }
 }
 
-function render(info, ms) {
+function showWarning(file, mode) {
+  const isSafari = /^((?!chrome|chromium|android|crios|edg).)*safari/i.test(navigator.userAgent);
+  let msg = null;
+  if (mode === "main" && file.size > 300e6)
+    msg = `메인 스레드 모드에서는 이 파일(${fmtBytes(file.size)})이 전부 메모리에 올라갑니다. 브라우저가 느려지거나 멈출 수 있습니다.`;
+  else if (isSafari && file.size > 500e6)
+    msg = `Safari는 WebAssembly 메모리 한도가 낮아 큰 파일(${fmtBytes(file.size)})에서 실패할 수 있습니다. Chrome 또는 Edge를 권장합니다.`;
+  else if (file.size > 1.5e9)
+    msg = `매우 큰 파일(${fmtBytes(file.size)})입니다. 데스크톱 Chrome/Edge에서도 메모리 부족으로 실패할 수 있습니다.`;
+  warnBox.hidden = !msg;
+  if (msg) warnBox.textContent = "⚠ " + msg;
+}
+
+function setTab(name) {
+  state.tab = name;
+  for (const [k, sec] of Object.entries(tabs)) sec.hidden = k !== name;
+  for (const b of topnav.querySelectorAll("button")) b.classList.toggle("active", b.dataset.tab === name);
+}
+
+function buildOverviewTab(info, ms) {
   const { file, summary, tree } = info;
-  currentSummary = summary;
-  reportBox.innerHTML = "";
-  reportBox.append(
+  const box = tabs.overview;
+  box.innerHTML = "";
+  box.append(
     overviewCard(file, summary, ms),
-    inspectSection(summary),
     dataframeSection("세포 정보 (obs)", summary.obs, "세포", "유전자 이름 외 추가 컬럼이 없습니다."),
     dataframeSection("유전자 정보 (var)", summary.var, "유전자", "추가 컬럼이 없습니다 (유전자 이름만)."),
     mappingSection(summary),
     unsSection(summary.uns),
   );
-  if (summary.raw) reportBox.append(rawSection(summary.raw));
-  reportBox.append(advancedTree(tree));
-  reportBox.hidden = false;
+  if (summary.raw) box.append(rawSection(summary.raw));
 }
 
-let currentSummary = null;
+function buildRawTab(tree) {
+  const box = tabs.raw;
+  box.innerHTML = "";
+  const card = document.createElement("section");
+  card.className = "card";
+  card.innerHTML = `<h2>원본 HDF5 트리</h2>`;
+  const rootNode = renderNode(tree);
+  if (rootNode.tagName === "DETAILS") rootNode.open = true;
+  card.appendChild(rootNode);
+  box.appendChild(card);
+}
 
 // ---- overview ------------------------------------------------------
 
@@ -223,206 +283,418 @@ function unsCount(uns) {
   return keys.length ? `${keys.length}개 항목` : "없음";
 }
 
-// ---- inspect panel: component -> key -> view -------------------
+// ---- explore tab: Miller columns + detail pane ---------------
 
-let inspectKeysCache = [];
+let labelCache = {}; // axis -> { map: Map(label->idx), n, tooLarge }
 
-function inspectComponents(s) {
-  const out = [];
-  if (s.obs && (s.obs.columns.length || s.obs.nRows)) out.push({ id: "obs", label: "세포 정보 (obs)" });
-  if (s.var && (s.var.columns.length || s.var.nRows)) out.push({ id: "var", label: "유전자 정보 (var)" });
-  if (s.X) out.push({ id: "X", label: "발현 행렬 X" });
-  for (const m of ["layers", "obsm", "varm", "obsp", "varp"]) if (Object.keys(s[m] || {}).length) out.push({ id: m, label: m });
-  if (Object.keys(s.uns || {}).filter((k) => k !== "__truncated__").length) out.push({ id: "uns", label: "비정형 데이터 (uns)" });
-  if (s.raw && s.raw.X) out.push({ id: "raw.X", label: "raw.X" });
-  return out;
+function unsHasKeys(uns) {
+  return Object.keys(uns || {}).filter((k) => k !== "__truncated__").length > 0;
 }
 
-function unsLeaves(node, prefix = "") {
-  const out = [];
-  for (const k of Object.keys(node || {})) {
-    if (k === "__truncated__") continue;
-    const v = node[k];
-    const path = prefix ? `${prefix}/${k}` : k;
-    if (v.kind === "dict") {
-      if (v.children) out.push(...unsLeaves(v.children, path));
-      else out.push({ path, kind: "dict" });
-    } else out.push({ path, kind: v.kind });
+// Children of a nav path, from the summary where possible; uns is lazy.
+async function navChildren(path) {
+  const s = openInfo.summary;
+  if (path.length === 0) {
+    const out = [];
+    if (s.X) out.push({ seg: "X", label: "X — 발현 행렬", kind: "matrix" });
+    if (s.obs) out.push({ seg: "obs", label: "obs — 세포 정보", kind: "dataframe" });
+    if (s.var) out.push({ seg: "var", label: "var — 유전자 정보", kind: "dataframe" });
+    for (const m of ["layers", "obsm", "varm", "obsp", "varp"])
+      if (Object.keys(s[m] || {}).length) out.push({ seg: m, label: m, kind: "mapping" });
+    if (unsHasKeys(s.uns)) out.push({ seg: "uns", label: "uns — 비정형", kind: "uns-dict" });
+    if (s.raw) out.push({ seg: "raw", label: "raw", kind: "group" });
+    return out;
   }
-  return out;
-}
+  const head = path[0];
 
-function inspectKeysFor(s, comp) {
-  if (comp === "obs" || comp === "var") {
-    const df = s[comp];
-    const list = [{ value: "__index__", label: comp === "obs" ? "_index (세포 이름)" : "_index (유전자 이름)", kind: "string" }];
-    for (const c of df.columns) list.push({ value: c.name, label: c.name, kind: c.kind === "group" ? "string" : c.kind });
-    return list;
+  if (head === "obs" || head === "var") {
+    if (path.length !== 1) return [];
+    return dfChildren(s[head], head === "obs" ? "세포 이름" : "유전자 이름");
   }
-  if (comp === "X") return [{ value: "X", label: "(전체 행렬)", kind: "matrix" }];
-  if (comp === "raw.X") return [{ value: "raw/X", label: "(전체 행렬)", kind: "matrix" }];
-  if (comp === "uns") return unsLeaves(s.uns).map((p) => ({ value: p.path, label: p.path, kind: "uns-" + p.kind }));
-  const map = s[comp] || {};
-  return Object.entries(map).map(([k, v]) => {
-    let kind = "matrix";
-    if (v.format === "dense") kind = Array.isArray(v.shape) && v.shape.length === 1 ? "vector" : "matrix";
-    else if (v.format === "group") kind = "group";
-    return { value: k, label: k, kind };
-  });
+  if (head === "X") return [];
+  if (["layers", "obsm", "varm", "obsp", "varp"].includes(head)) {
+    if (path.length !== 1) return [];
+    return Object.entries(s[head]).map(([k, v]) => ({
+      seg: k,
+      label: k,
+      kind: v.format === "dense" ? (Array.isArray(v.shape) && v.shape.length === 1 ? "vector" : "matrix") : v.format === "group" ? "group" : "matrix",
+    }));
+  }
+  if (head === "raw") {
+    if (path.length === 1) {
+      const out = [];
+      if (s.raw.X) out.push({ seg: "X", label: "X", kind: "matrix" });
+      if (s.raw.var) out.push({ seg: "var", label: "var", kind: "dataframe" });
+      return out;
+    }
+    if (path[1] === "var" && path.length === 2) return dfChildren(s.raw.var, "유전자 이름");
+    return [];
+  }
+  if (head === "uns") {
+    const p = "uns" + path.slice(1).map((x) => "/" + x).join("");
+    const eng = await getEngine();
+    const d = await eng.call("unsNode", { path: p });
+    if (d.kind !== "dict") return [];
+    const keys = d.keys || [];
+    if (keys.length > 40) return keys.map((k) => ({ seg: k, label: k, kind: "uns-node" }));
+    const out = [];
+    for (const k of keys) {
+      let kind = "uns-node";
+      try {
+        const cd = await eng.call("unsNode", { path: p + "/" + k });
+        kind = cd.kind === "dict" ? "uns-dict" : cd.kind === "array" ? "uns-array" : "uns-scalar";
+      } catch (_) {}
+      out.push({ seg: k, label: k, kind });
+    }
+    return out;
+  }
+  return [];
 }
 
-function inspectViewsFor(kind) {
+function dfChildren(df, idxWord) {
+  const list = [{ seg: "__index__", label: `_index (${idxWord})`, kind: "column-string" }];
+  for (const c of df.columns || []) list.push({ seg: c.name, label: c.name, kind: "column-" + (c.kind === "group" ? "string" : c.kind) });
+  return list;
+}
+
+const DRILLABLE = new Set(["dataframe", "mapping", "uns-dict", "group", "uns-node"]);
+
+function viewsFor(kind) {
   switch (kind) {
-    case "categorical":
-    case "bool":
+    case "column-categorical":
+    case "column-bool":
       return [["counts", "빈도 표"], ["bar", "막대그래프"], ["preview", "값 미리보기"]];
-    case "numeric":
-    case "vector":
-    case "uns-array":
+    case "column-numeric":
       return [["stats", "요약통계"], ["hist", "히스토그램"], ["preview", "값 미리보기"]];
-    case "string":
+    case "column-string":
       return [["counts", "고유값·빈도"], ["preview", "값 미리보기"]];
     case "matrix":
       return [["slice", "구간 미리보기"], ["minfo", "형태·밀도"]];
+    case "vector":
+    case "uns-array":
+      return [["preview", "값 미리보기"], ["stats", "요약통계"], ["hist", "히스토그램"]];
     case "uns-scalar":
       return [["value", "값"]];
-    case "uns-dict":
-    case "group":
-      return [["ginfo", "내용 목록"]];
     default:
       return [["preview", "미리보기"]];
   }
 }
 
-function matrixAxes(comp) {
-  if (comp === "X" || comp === "layers") return { rowAxis: "obs", colAxis: "var" };
-  if (comp === "obsm" || comp === "raw.X") return { rowAxis: "obs", colAxis: null };
-  if (comp === "varm") return { rowAxis: "var", colAxis: null };
-  if (comp === "obsp") return { rowAxis: "obs", colAxis: "obs" };
-  if (comp === "varp") return { rowAxis: "var", colAxis: "var" };
+function matrixAxesForPath(path) {
+  const h = path[0];
+  if (h === "X" || h === "layers") return { rowAxis: "obs", colAxis: "var" };
+  if (h === "obsm" || h === "raw") return { rowAxis: "obs", colAxis: null };
+  if (h === "varm") return { rowAxis: "var", colAxis: null };
+  if (h === "obsp") return { rowAxis: "obs", colAxis: "obs" };
+  if (h === "varp") return { rowAxis: "var", colAxis: "var" };
   return { rowAxis: null, colAxis: null };
 }
 
-function optionEls(list) {
-  return list.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
+function pathToEnginePath(path) {
+  if (path[0] === "raw") return "raw/" + path.slice(1).join("/");
+  return path.join("/");
 }
 
-function inspectSection(s) {
-  const sec = document.createElement("section");
-  sec.className = "card";
-  const comps = inspectComponents(s);
-  if (!comps.length) {
-    sec.innerHTML = `<h2>항목 살펴보기</h2><p class="muted">살펴볼 항목이 없습니다.</p>`;
-    return sec;
-  }
-  sec.innerHTML = `
-    <h2>항목 살펴보기</h2>
-    <p class="muted">구성요소 → 항목 → 보기 방식을 골라 실제 값을 확인하세요.</p>
-    <div class="pickers">
-      <label>구성요소<select id="pk-comp">${optionEls(comps.map((c) => ({ value: c.id, label: c.label })))}</select></label>
-      <label>항목<select id="pk-key"></select></label>
-      <label>보기<select id="pk-view"></select></label>
-    </div>
-    <div id="pk-opts"></div>
-    <div><button id="pk-run" type="button">확인</button></div>
-    <div id="pk-result"></div>`;
+// ---- render ----------------------------------------------------
 
-  const compSel = sec.querySelector("#pk-comp");
-  const keySel = sec.querySelector("#pk-key");
-  const viewSel = sec.querySelector("#pk-view");
-  const optsBox = sec.querySelector("#pk-opts");
-  const resultBox = sec.querySelector("#pk-result");
+async function buildExploreTab() {
+  await renderMiller();
+}
 
-  const currentKey = () => inspectKeysCache.find((k) => k.value === keySel.value);
-
-  function refillKeys() {
-    inspectKeysCache = inspectKeysFor(s, compSel.value);
-    keySel.innerHTML = optionEls(inspectKeysCache);
-    refillViews();
-  }
-  function refillViews() {
-    const k = currentKey();
-    const views = inspectViewsFor(k ? k.kind : "");
-    viewSel.innerHTML = views.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("");
-    refillOpts();
-  }
-  function refillOpts() {
-    const k = currentKey();
-    if (k && k.kind === "matrix" && viewSel.value === "slice") {
-      const entry = matrixEntry(s, compSel.value, k.value);
-      const shp = entry && entry.shape ? entry.shape : [null, null];
-      optsBox.innerHTML = `
-        <label>행 시작<input id="pk-r0" type="number" min="0" value="0"></label>
-        <label>행 수<input id="pk-rn" type="number" min="1" max="100" value="20"></label>
-        <label>열 시작<input id="pk-c0" type="number" min="0" value="0"></label>
-        <label>열 수<input id="pk-cn" type="number" min="1" max="60" value="20"></label>
-        <span class="muted" style="align-self:end">전체 ${num(shp[0])} × ${num(shp[1])}</span>`;
-    } else {
-      optsBox.innerHTML = "";
+async function renderMiller() {
+  millerEl.innerHTML = "";
+  let leafReached = false;
+  for (let i = 0; i <= state.path.length; i++) {
+    const prefix = state.path.slice(0, i);
+    let kids;
+    try {
+      kids = await navChildren(prefix);
+    } catch (e) {
+      kids = [];
     }
+    if (!kids.length) {
+      leafReached = i > 0;
+      break;
+    }
+    millerEl.appendChild(millerColumn(kids, i, state.path[i]));
   }
-
-  function readSliceInputs() {
-    const g = (id, d) => {
-      const n = parseInt((sec.querySelector(id) || {}).value, 10);
-      return Number.isFinite(n) ? n : d;
-    };
-    return {
-      r0: Math.max(0, g("#pk-r0", 0)),
-      rn: Math.min(100, Math.max(1, g("#pk-rn", 20))),
-      c0: Math.max(0, g("#pk-c0", 0)),
-      cn: Math.min(60, Math.max(1, g("#pk-cn", 20))),
-    };
+  renderBreadcrumb();
+  if (leafReached) {
+    const entry = await entryFor(state.path);
+    if (entry) await showDetail(state.path, entry);
+    else clearDetail();
+  } else {
+    clearDetail();
   }
+}
 
-  async function run() {
-    const comp = compSel.value;
-    const k = currentKey();
-    const view = viewSel.value;
-    if (!comp || !k || !view) return;
-    resultBox.innerHTML = `<p class="muted">불러오는 중…</p>`;
+function millerColumn(entries, colIndex, selectedSeg) {
+  const col = document.createElement("div");
+  col.className = "mcol";
+  for (const e of entries) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "mitem" + (e.seg === selectedSeg ? " sel" : "");
+    const drill = DRILLABLE.has(e.kind);
+    b.innerHTML = `<span class="ml">${esc(e.label)}</span>${drill ? '<span class="mr">›</span>' : `<span class="mk">${esc(kindShort(e.kind))}</span>`}`;
+    b.addEventListener("click", () => selectSeg(colIndex, e));
+    col.appendChild(b);
+  }
+  return col;
+}
+
+function kindShort(kind) {
+  if (kind.startsWith("column-")) return kindKo(kind.slice(7));
+  if (kind === "matrix") return "행렬";
+  if (kind === "vector") return "벡터";
+  if (kind === "uns-scalar") return "값";
+  if (kind === "uns-array") return "배열";
+  return "";
+}
+
+async function entryFor(path) {
+  if (!path.length) return null;
+  const parent = await navChildren(path.slice(0, -1));
+  const e = parent.find((x) => x.seg === path[path.length - 1]) || null;
+  if (e && e.kind === "uns-node") {
     try {
       const eng = await getEngine();
-      if (comp === "obs" || comp === "var") {
-        renderColumnView(resultBox, view, await eng.call("column", { axis: comp, key: k.value }));
-      } else if (comp === "uns") {
-        renderUnsView(resultBox, view, await eng.call("unsNode", { path: "uns/" + k.value }), k.value);
-      } else if (k.kind === "vector" || k.kind === "group") {
-        renderUnsView(resultBox, view, await eng.call("unsNode", { path: `${comp}/${k.value}` }), k.value);
-      } else if (view === "minfo") {
-        renderMatrixInfo(resultBox, matrixEntry(s, comp, k.value), k.value);
-      } else {
-        const path = comp === "X" ? "X" : comp === "raw.X" ? "raw/X" : `${comp}/${k.value}`;
-        const data = await eng.call("matrix", { path, ...readSliceInputs(), ...matrixAxes(comp) });
-        renderMatrixSlice(resultBox, data);
-      }
-    } catch (e) {
-      resultBox.innerHTML = `<p class="err">읽기 실패: ${esc(e && e.message ? e.message : e)}</p>`;
+      const d = await eng.call("unsNode", { path: pathToEnginePath(path) });
+      e.kind = d.kind === "array" ? "uns-array" : d.kind === "dict" ? "uns-dict" : "uns-scalar";
+    } catch (_) {
+      e.kind = "uns-scalar";
     }
   }
-
-  compSel.addEventListener("change", () => {
-    refillKeys();
-    run();
-  });
-  keySel.addEventListener("change", () => {
-    refillViews();
-    run();
-  });
-  viewSel.addEventListener("change", () => {
-    refillOpts();
-    run();
-  });
-  sec.querySelector("#pk-run").addEventListener("click", run);
-
-  refillKeys();
-  return sec;
+  return e;
 }
 
-function matrixEntry(s, comp, key) {
-  if (comp === "X") return s.X;
-  if (comp === "raw.X") return s.raw && s.raw.X;
-  return (s[comp] || {})[key];
+async function selectSeg(colIndex, entry) {
+  state.path = state.path.slice(0, colIndex).concat(entry.seg);
+  state.view = null;
+  await renderMiller();
+}
+
+function renderBreadcrumb() {
+  if (!state.path.length) {
+    breadcrumbEl.innerHTML = `<span class="muted">항목을 선택하세요</span>`;
+    return;
+  }
+  const parts = state.path.map((seg, i) => {
+    const label = seg === "__index__" ? "_index" : seg;
+    return `<button type="button" data-i="${i}">${esc(label)}</button>`;
+  });
+  breadcrumbEl.innerHTML = parts.join('<span class="sep">/</span>');
+  for (const b of breadcrumbEl.querySelectorAll("button")) {
+    b.addEventListener("click", async () => {
+      state.path = state.path.slice(0, +b.dataset.i + 1);
+      state.view = null;
+      await renderMiller();
+    });
+  }
+}
+
+function clearDetail() {
+  detailEl.innerHTML = "";
+}
+
+// ---- detail pane --------------------------------------------
+
+let lastDetail = { key: null, data: null };
+
+async function showDetail(path, entry) {
+  const kind = entry.kind;
+  const views = viewsFor(kind);
+  if (!state.view || !views.some(([v]) => v === state.view)) state.view = views[0][0];
+
+  detailEl.innerHTML = `
+    <div class="detail-head">
+      <span class="dtitle mono">${esc(path.map((p) => (p === "__index__" ? "_index" : p)).join(" / "))}</span>
+      <span class="dkind">${esc(kindShort(kind) || kind)}</span>
+      <span class="views">${views.map(([v, l]) => `<button type="button" data-v="${v}"${v === state.view ? ' class="on"' : ""}>${esc(l)}</button>`).join("")}</span>
+      <button type="button" id="csvbtn" class="csv" hidden>CSV로 저장</button>
+    </div>
+    <div id="detail-opts"></div>
+    <div id="detail-body"><p class="muted">불러오는 중…</p></div>`;
+
+  for (const b of detailEl.querySelectorAll(".views button")) {
+    b.addEventListener("click", () => {
+      state.view = b.dataset.v;
+      showDetail(path, entry);
+    });
+  }
+
+  const body = el("detail-body");
+  const optsBox = el("detail-opts");
+  const csvBtn = el("csvbtn");
+  let csvRows = null;
+  const enableCsv = (rows) => {
+    csvRows = rows;
+    csvBtn.hidden = !rows;
+  };
+  csvBtn.addEventListener("click", () => {
+    if (csvRows) downloadCSV(`${path.join("_").replace(/[^\w.-]+/g, "_")}_${state.view}.csv`, csvRows);
+  });
+
+  try {
+    const eng = await getEngine();
+
+    if (kind.startsWith("column-")) {
+      const axis = path.slice(0, -1).join("/"); // "obs" | "var" | "raw/var"
+      const cacheKey = "col:" + path.join("/");
+      const d = lastDetail.key === cacheKey ? lastDetail.data : await eng.call("column", { axis, key: path[path.length - 1] });
+      lastDetail = { key: cacheKey, data: d };
+      renderColumnView(body, state.view, d);
+      enableCsv(csvForColumn(state.view, d));
+      return;
+    }
+
+    if (kind === "uns-scalar" || kind === "uns-array" || kind === "vector") {
+      const ep = pathToEnginePath(path);
+      const cacheKey = "uns:" + ep;
+      const d = lastDetail.key === cacheKey ? lastDetail.data : await eng.call("unsNode", { path: ep });
+      lastDetail = { key: cacheKey, data: d };
+      renderUnsView(body, state.view, d, path[path.length - 1]);
+      enableCsv(csvForUns(state.view, d));
+      return;
+    }
+
+    if (kind === "matrix") {
+      if (state.view === "minfo") {
+        renderMatrixInfo(body, matrixEntryForPath(path), path[path.length - 1]);
+        enableCsv(null);
+        return;
+      }
+      const axes = matrixAxesForPath(path);
+      await buildSliceControls(optsBox, path, axes);
+      await runSlice(body, path, axes, enableCsv);
+      return;
+    }
+
+    body.innerHTML = `<p class="muted">표시할 내용이 없습니다.</p>`;
+  } catch (e) {
+    body.innerHTML = `<p class="err">읽기 실패: ${esc(e && e.message ? e.message : e)}</p>`;
+  }
+}
+
+function matrixEntryForPath(path) {
+  const s = openInfo.summary;
+  if (path[0] === "X") return s.X;
+  if (path[0] === "raw" && path[1] === "X") return s.raw && s.raw.X;
+  return (s[path[0]] || {})[path[1]];
+}
+
+async function buildSliceControls(box, path, axes) {
+  const entry = matrixEntryForPath(path);
+  const shp = entry && entry.shape ? entry.shape : [null, null];
+  await ensureLabels(axes.rowAxis);
+  await ensureLabels(axes.colAxis);
+  const rl = axes.rowAxis && labelCache[axes.rowAxis] && !labelCache[axes.rowAxis].tooLarge ? "rowlabels" : "";
+  const cl = axes.colAxis && labelCache[axes.colAxis] && !labelCache[axes.colAxis].tooLarge ? "collabels" : "";
+  box.innerHTML = `
+    <label>행 시작 <input id="s-r0" type="text" value="0" ${rl ? `list="${rl}"` : ""} placeholder="번호 또는 이름"></label>
+    <label>행 수 <input id="s-rn" type="number" min="1" max="100" value="20"></label>
+    <label>열 시작 <input id="s-c0" type="text" value="0" ${cl ? `list="${cl}"` : ""} placeholder="번호 또는 이름"></label>
+    <label>열 수 <input id="s-cn" type="number" min="1" max="60" value="20"></label>
+    <button type="button" id="s-go">적용</button>
+    <span class="muted" style="align-self:end">전체 ${num(shp[0])} × ${num(shp[1])}</span>
+    ${rl ? datalist(rl, labelCache[axes.rowAxis].labels) : ""}
+    ${cl ? datalist(cl, labelCache[axes.colAxis].labels) : ""}`;
+  el("s-go").addEventListener("click", () => runSlice(el("detail-body"), path, axes, (rows) => {
+    const b = el("csvbtn");
+    b.hidden = !rows;
+    b.__rows = rows;
+  }));
+}
+
+function datalist(id, labels) {
+  const opts = labels.slice(0, 5000).map((l) => `<option value="${esc(l)}">`).join("");
+  return `<datalist id="${id}">${opts}</datalist>`;
+}
+
+async function ensureLabels(axis) {
+  if (!axis || labelCache[axis]) return;
+  try {
+    const eng = await getEngine();
+    const r = await eng.call("axisIndex", { axis });
+    if (r.tooLarge) labelCache[axis] = { tooLarge: true, n: r.n };
+    else labelCache[axis] = { labels: r.labels, map: new Map(r.labels.map((l, i) => [l, i])), n: r.n };
+  } catch (_) {
+    labelCache[axis] = { tooLarge: true };
+  }
+}
+
+function resolveIndex(axis, raw) {
+  const t = String(raw).trim();
+  if (/^\d+$/.test(t)) return parseInt(t, 10);
+  const c = labelCache[axis];
+  if (c && c.map && c.map.has(t)) return c.map.get(t);
+  return 0;
+}
+
+async function runSlice(body, path, axes, enableCsv) {
+  body.innerHTML = `<p class="muted">불러오는 중…</p>`;
+  const r0 = Math.max(0, resolveIndex(axes.rowAxis, (el("s-r0") || {}).value ?? 0));
+  const c0 = Math.max(0, resolveIndex(axes.colAxis, (el("s-c0") || {}).value ?? 0));
+  const rn = Math.min(100, Math.max(1, parseInt((el("s-rn") || {}).value, 10) || 20));
+  const cn = Math.min(60, Math.max(1, parseInt((el("s-cn") || {}).value, 10) || 20));
+  try {
+    const eng = await getEngine();
+    const data = await eng.call("matrix", { path: pathToEnginePath(path), r0, rn, c0, cn, ...axes });
+    renderMatrixSlice(body, data);
+    if (typeof enableCsv === "function") enableCsv(csvForMatrix(data));
+    const b = el("csvbtn");
+    if (b) {
+      b.hidden = false;
+      b.__rows = csvForMatrix(data);
+      b.onclick = () => downloadCSV(`${path.join("_")}_slice.csv`, b.__rows);
+    }
+  } catch (e) {
+    body.innerHTML = `<p class="err">읽기 실패: ${esc(e && e.message ? e.message : e)}</p>`;
+  }
+}
+
+// ---- CSV -----------------------------------------------------
+
+function csvCell(v) {
+  const s = v == null ? "" : String(v);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function downloadCSV(name, rows) {
+  const csv = rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+function csvForColumn(view, d) {
+  if (view === "preview") return [["행", "값"], ...(d.preview || []).map((r) => [r.label, r.value])];
+  if (view === "stats") {
+    const st = d.stats;
+    if (!st || !st.n) return null;
+    return [["통계", "값"], ["개수", st.n], ["0의개수", st.nZero], ["최소", st.min], ["25%", st.q1], ["중앙값", st.median], ["75%", st.q3], ["최대", st.max], ["평균", st.mean], ["표준편차", st.std]];
+  }
+  if (view === "counts" || view === "bar") return [["값", "개수"], ...((d.items || []).map((x) => [x.value, x.count]))];
+  return null;
+}
+
+function csvForUns(view, d) {
+  if (d.kind === "scalar") return [["이름", "값"], ["", d.value]];
+  if (d.kind === "array") return [["색인", "값"], ...(d.data || []).map((v, i) => [i, v])];
+  return null;
+}
+
+function csvForMatrix(d) {
+  const [c0, c1] = d.colRange;
+  const cols = d.colLabels || Array.from({ length: c1 - c0 }, (_, i) => c0 + i);
+  const rows = [["", ...cols]];
+  d.rows.forEach((row, i) => rows.push([d.rowLabels ? d.rowLabels[i] : d.rowRange[0] + i, ...row]));
+  return rows;
 }
 
 // ---- inspect result renderers --------------------------------
@@ -669,17 +941,7 @@ function rawSection(raw) {
   return sec;
 }
 
-// ---- advanced: raw HDF5 tree ---------------------------------
-
-function advancedTree(tree) {
-  const sec = document.createElement("section");
-  sec.className = "card";
-  const det = document.createElement("details");
-  det.innerHTML = `<summary><b>고급:</b> 원본 HDF5 트리</summary>`;
-  det.appendChild(renderNode(tree));
-  sec.appendChild(det);
-  return sec;
-}
+// ---- raw HDF5 tree (구조 tab) ---------------------------------
 
 function nodeLine(node) {
   if (node.kind === "dataset") {
@@ -735,6 +997,15 @@ function renderNode(node) {
 // ---- events -------------------------------------------------
 
 fileInput.addEventListener("change", () => handleFile(fileInput.files[0]));
+
+for (const b of topnav.querySelectorAll("button")) {
+  b.addEventListener("click", () => setTab(b.dataset.tab));
+}
+el("filebar-change").addEventListener("click", () => {
+  picker.hidden = false;
+  fileInput.value = "";
+  fileInput.click();
+});
 
 ["dragenter", "dragover"].forEach((t) =>
   drop.addEventListener(t, (e) => {

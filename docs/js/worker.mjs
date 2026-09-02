@@ -8,7 +8,7 @@
 import { ready, File as H5File } from "../vendor/h5wasm/hdf5_hl.js";
 import { summarize } from "./anndata.mjs";
 import { buildReport } from "./hdf5tree.mjs";
-import { readColumn, readUnsNode, matrixWithLabels } from "./reads.mjs";
+import { readColumn, readUnsNode, matrixWithLabels, axisIndex } from "./reads.mjs";
 
 const MOUNT = "/work";
 let Module = null;
@@ -62,6 +62,7 @@ const OPS = {
   column: (p) => readColumn(need(), p.axis, p.key),
   matrix: (p) => matrixWithLabels(need(), p),
   unsNode: (p) => readUnsNode(need(), p.path),
+  axisIndex: (p) => axisIndex(need(), p.axis),
 };
 
 self.onmessage = async (ev) => {

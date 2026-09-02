@@ -8,13 +8,37 @@
 
 개발 계획은 [PLAN.md](PLAN.md) 참고.
 
+## 사용법
+
+파일을 선택하면 상단 탭이 나타난다.
+
+- **개요** — 세포 × 유전자 수, `X`의 형식·밀도, obs/var 컬럼 목록, 레이어·임베딩,
+  uns 요약을 일상어로.
+- **탐색** — 왼쪽 열에서 시작해 오른쪽으로 파고드는 열(column) 방식 탐색기.
+  `obs`/`var`의 컬럼, `layers`/`obsm`/…의 키, `uns`의 중첩 구조를 열을 쌓으며 들어간다.
+  잎 항목을 고르면 아래에 값이 표시된다:
+  - 범주형 → 빈도 표 / 막대그래프, 수치형 → 요약통계 / 히스토그램, 문자열 → 고유값·빈도
+  - 행렬(`X`, 레이어 등) → 구간 미리보기(행·열 시작을 **번호 또는 이름**으로 지정) / 형태·밀도
+  - 어떤 표든 **CSV로 저장** 가능
+- **구조** — 원본 HDF5 트리(그룹·데이터셋·속성) 그대로.
+
+파일은 브라우저 밖으로 나가지 않는다. 기본은 Web Worker(h5wasm + WORKERFS 지연 로딩)
+이고, 워커를 못 쓰는 브라우저에서는 자동으로 메인 스레드(파일 전체 메모리 로드)로
+전환하며 경고를 표시한다. `?engine=main` 으로 폴백을 강제할 수 있다.
+
 ## 구조
 
 ```
 docs/            GitHub Pages로 배포되는 정적 사이트 (이것만 있으면 동작)
-  index.html
-  css/ js/
-  vendor/h5wasm/  HDF5 읽기용 WASM 라이브러리 (벤더링, 무수정)
+  index.html  css/style.css
+  js/  app.mjs          UI 셸: 탑 네비 + 탐색 열 + 상세 패널
+       worker.mjs       Web Worker 엔진 (WORKERFS 지연 로딩)
+       mainengine.mjs   메인 스레드 폴백 엔진 (MEMFS)
+       hdf5tree.mjs      두 엔진 공용 원본 트리 순회
+       anndata.mjs       AnnData 인코딩 → 구조 요약
+       reads.mjs         값 읽기 (컬럼·행렬 슬라이스·uns·축 인덱스)
+       stats.mjs charts.mjs   통계 + 의존성 없는 SVG 차트
+  vendor/h5wasm/   HDF5 읽기용 WASM 라이브러리 (벤더링, 무수정)
 scripts/         개발·검증용 (배포 대상 아님)
 pyproject.toml   uv 환경 — 검증 스크립트 실행용 (런타임 서버 아님)
 ```
@@ -40,9 +64,12 @@ Source를 "Deploy from a branch", Branch를 `main` / `/docs`로 지정.
 ## 개발 환경 (검증용)
 
 ```bash
-uv sync                                    # 파이썬 3.12 환경
-uv run python scripts/expected_summary.py context_A.h5ad   # 정답 요약(JSON)
-node scripts/smoke_h5wasm.mjs context_A.h5ad               # 벤더 라이브러리 동작 확인
+uv sync                                                  # 파이썬 3.12 환경
+uv run python scripts/make_fixture.py scratchpad/fixture.h5ad   # 모든 인코딩을 담은 작은 테스트 파일
+uv run python scripts/expected_summary.py context_A.h5ad        # anndata 기준 정답 요약(JSON)
+node scripts/summary_h5wasm.mjs context_A.h5ad                  # 브라우저 파서를 Node에서 실행 → 대조
+node scripts/reads_h5wasm.mjs scratchpad/fixture.h5ad          # 값 읽기 연산 점검
+node scripts/browser_probe.mjs http://localhost:8000/          # 실제 헤드리스 Chrome(실시간 CDP) 회귀 테스트
 ```
 
 파이썬 의존성: `anndata`, `h5py`, `numpy`, `pandas`, `scipy` (웹 앱 런타임과 무관,

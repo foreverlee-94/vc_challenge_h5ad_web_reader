@@ -7,25 +7,51 @@
     <link rel="stylesheet" href="./css/style.css" />
   </head>
   <body>
-    <header>
-      <h1>h5ad 뷰어</h1>
-      <p class="lede">
-        단일세포 데이터 파일(<code>.h5ad</code>) 안에 무엇이 들어있는지 브라우저에서 바로 확인합니다.
-        파일은 <strong>이 브라우저 안에서만</strong> 열리며 서버로 전송되지 않습니다.
-      </p>
+    <header id="topbar">
+      <div class="brand">
+        <strong>h5ad 뷰어</strong>
+        <span class="tag">클라이언트 사이드 · 업로드 없음</span>
+      </div>
+      <div id="filebar" hidden>
+        <span id="filebar-name" class="mono"></span>
+        <span id="filebar-meta" class="muted"></span>
+        <button id="filebar-change" type="button">다른 파일</button>
+      </div>
+      <nav id="topnav" hidden>
+        <button data-tab="overview" class="active">개요</button>
+        <button data-tab="explore">탐색</button>
+        <button data-tab="raw">구조</button>
+      </nav>
     </header>
 
     <main>
       <section id="picker">
+        <p class="lede">
+          단일세포 데이터 파일(<code>.h5ad</code>) 안에 무엇이 들어있는지 브라우저에서 바로 확인합니다.
+          파일은 <strong>이 브라우저 안에서만</strong> 열리며 서버로 전송되지 않습니다.
+        </p>
         <label id="drop" for="file">
           <span class="big">파일 선택 또는 끌어다 놓기</span>
           <span class="hint">.h5ad / .h5 / .hdf5</span>
           <input id="file" type="file" accept=".h5ad,.h5,.hdf5" hidden />
         </label>
-        <p id="status" data-kind="info"></p>
       </section>
 
-      <section id="report" hidden></section>
+      <p id="status" data-kind="info"></p>
+      <div id="warn" hidden></div>
+
+      <section id="tab-overview" class="tab" hidden></section>
+
+      <section id="tab-explore" class="tab" hidden>
+        <p class="muted explain">
+          왼쪽 열에서 시작해 오른쪽으로 파고들며 탐색합니다. 잎 항목을 고르면 아래에 값이 표시됩니다.
+        </p>
+        <div id="breadcrumb"></div>
+        <div id="miller"></div>
+        <div id="detail"></div>
+      </section>
+
+      <section id="tab-raw" class="tab" hidden></section>
     </main>
 
     <footer>

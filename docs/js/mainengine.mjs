@@ -6,7 +6,7 @@
 import { ready, File as H5File } from "../vendor/h5wasm/hdf5_hl.js";
 import { summarize } from "./anndata.mjs";
 import { buildReport } from "./hdf5tree.mjs";
-import { readColumn, readUnsNode, matrixWithLabels } from "./reads.mjs";
+import { readColumn, readUnsNode, matrixWithLabels, axisIndex } from "./reads.mjs";
 
 let Module = null;
 let FS = null;
@@ -55,6 +55,8 @@ export const mainEngine = {
         return Promise.resolve().then(() => matrixWithLabels(need(), payload));
       case "unsNode":
         return Promise.resolve().then(() => readUnsNode(need(), payload.path));
+      case "axisIndex":
+        return Promise.resolve().then(() => axisIndex(need(), payload.axis));
       default:
         return Promise.reject(new Error(`unknown op: ${type}`));
     }

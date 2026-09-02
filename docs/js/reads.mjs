@@ -45,6 +45,15 @@ export function axisLabels(file, axis, start, count) {
   return { labels: Array.from(ds.slice([[s, e]]), String), start: s, n };
 }
 
+// Full index for name -> row/col lookup in the UI. Skipped for very large axes.
+export function axisIndex(file, axis, cap = 300000) {
+  const ds = indexDataset(file, axis);
+  if (!ds) return { n: 0, labels: [] };
+  const n = normAttr(ds.shape)[0];
+  if (n > cap) return { n, tooLarge: true };
+  return { n, labels: Array.from(ds.value, String) };
+}
+
 // ---- column reader ------------------------------------------------
 
 export function readColumn(file, axis, key) {

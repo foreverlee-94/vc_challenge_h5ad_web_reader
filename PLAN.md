@@ -96,9 +96,12 @@ scripts/          (개발·검증용, Pages 미포함)
   요약통계/값 미리보기/행렬 구간 미리보기(행·열 범위 입력). 두 엔진(worker/main)에
   `eng.call(type,payload)` 공통. `scripts/reads_h5wasm.mjs`로 fixture + context_A 검증,
   헤드리스 Chrome로 드롭다운 조작까지 확인.
-- **Phase 4 — 마무리**: 대용량·Safari 경고, 유전자명/세포명으로 행·열 선택,
-  현재 보기 CSV 내보내기, README 갱신.
-- **후속**: Playwright 스모크 테스트, IDBFS 캐시.
+- **Phase 4 — 마무리 (완료)**: 대용량·Safari 경고 배너, 행·열을 번호 또는 이름으로
+  지정(축 인덱스 캐시 + datalist), 현재 보기 CSV 내보내기(Blob 다운로드), README 갱신.
+- **UI 개편 (완료)**: 탑 네비게이션(개요 / 탐색 / 구조) + 탐색 탭의 Miller 컬럼
+  (왼→오 스택으로 내포 구조 탐색) + 하단 상세 패널(보기 전환 + CSV). uns는 지연 로딩,
+  자식이 40개 이하면 종류(DIR/값/배열) 미리 표시.
+- **후속**: Playwright 스모크 테스트, IDBFS 캐시, 상세 패널을 넓은 화면에서 우측 배치.
 
 ## 로컬 미리보기
 
