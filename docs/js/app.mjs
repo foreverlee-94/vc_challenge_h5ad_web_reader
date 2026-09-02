@@ -177,7 +177,7 @@ async function handleFile(file) {
     const ms = Math.round(performance.now() - t0);
     openInfo = info;
     labelCache = {};
-    setStatus(`열림: ${file.name} · ${ms} ms${eng.mode === "main" ? " · 메인 스레드 모드(파일 전체 메모리 로드)" : ""}`, "ok");
+    setStatus(`로드 완료 · ${file.name} · ${ms} ms${eng.mode === "main" ? " · 메인 스레드 모드(파일 전체 메모리 로드)" : ""}`, "ok");
     intro.hidden = true;
     openBtn.hidden = true;
     topnav.hidden = false;
@@ -216,17 +216,19 @@ function setTab(name) {
 }
 
 function buildOverviewTab(info, ms) {
-  const { file, summary, tree } = info;
+  const { file, summary } = info;
   const box = tabs.overview;
   box.innerHTML = "";
-  box.append(
-    overviewCard(file, summary, ms),
-    dataframeSection("세포 정보 (obs)", summary.obs, "세포", "유전자 이름 외 추가 컬럼이 없습니다."),
-    dataframeSection("유전자 정보 (var)", summary.var, "유전자", "추가 컬럼이 없습니다 (유전자 이름만)."),
-    mappingSection(summary),
-    unsSection(summary.uns),
-  );
-  if (summary.raw) box.append(rawSection(summary.raw));
+  const add = (sec, span) => {
+    sec.classList.add(span);
+    box.appendChild(sec);
+  };
+  add(overviewCard(file, summary, ms), "ov12");
+  add(dataframeSection("세포 정보 (obs)", summary.obs, "세포"), "ov6");
+  add(dataframeSection("유전자 정보 (var)", summary.var, "유전자"), "ov6");
+  add(mappingSection(summary), "ov8");
+  add(unsSection(summary.uns), "ov4");
+  if (summary.raw) add(rawSection(summary.raw), "ov12");
 }
 
 function buildRawTab(tree) {
@@ -247,33 +249,33 @@ function overviewCard(file, s, ms) {
   const sec = document.createElement("section");
   sec.className = "card";
   const X = s.X;
-  const enc = s.encoding ? `${s.encoding}${s.encodingVersion ? " " + s.encodingVersion : ""}` : "표시 없음";
+  const enc = s.encoding ? `${s.encoding}${s.encodingVersion ? " " + s.encodingVersion : ""}` : "(표시 없음)";
 
-  let xLine = "발현값 행렬 X가 없습니다.";
-  if (X) {
-    const fmt = FORMAT_KO[X.format] || X.format;
-    if (X.format === "dense") {
-      xLine = `발현값 행렬 X는 <b>${fmt}</b> (${esc(X.dtype || "?")}), 크기 ${num(X.shape[0])} × ${num(X.shape[1])}.`;
-    } else {
-      xLine = `발현값 행렬 X는 <b>${fmt}</b> (${esc(X.dtype || "?")})이고, 전체의 <b>${pct(X.density)}</b>가 0이 아닌 값입니다 (${num(X.nnz)}개).`;
-    }
-  }
+  let xLine;
+  if (!X) xLine = "발현 행렬 X 없음.";
+  else if (X.format === "dense")
+    xLine = `발현 행렬 X — 조밀 형식 (${esc(X.dtype || "?")}), ${num(X.shape[0])} × ${num(X.shape[1])}.`;
+  else
+    xLine = `발현 행렬 X — ${esc(FORMAT_KO[X.format] || X.format)} (${esc(X.dtype || "?")}), 비영 원소 ${num(X.nnz)}개, 밀도 ${pct(X.density)}.`;
+
+  const facts = [
+    ["파일", `${esc(file.name)} · ${fmtBytes(file.size)}`],
+    ["AnnData 형식", esc(enc)],
+    ["발현 행렬 X", X ? `${esc(FORMAT_KO[X.format] || X.format)} · ${esc(X.dtype || "?")}` : "없음"],
+    ["X 밀도 / 비영 원소", X && X.density != null ? `${pct(X.density)} · ${num(X.nnz)}` : "—"],
+    ["obs 컬럼", s.obs ? `${num(s.obs.nColumns)}개` : "없음"],
+    ["var 컬럼", s.var ? `${num(s.var.nColumns)}개` : "없음"],
+    ["layers·obsm·varm·obsp·varp", mappingCounts(s)],
+    ["uns 항목", unsCount(s.uns)],
+    ["raw", s.raw ? "있음" : "없음"],
+    ["로드", `${ms} ms · ${engineMode === "main" ? "메인 스레드" : "백그라운드 작업자"}`],
+  ];
 
   sec.innerHTML = `
     <h2>개요</h2>
     <p class="big">${num(s.n_obs)} 세포 &times; ${num(s.n_vars)} 유전자</p>
     <p class="prose">${xLine}</p>
-    <table class="kv">
-      <tr><th>파일</th><td>${esc(file.name)} (${fmtBytes(file.size)})</td></tr>
-      <tr><th>형식</th><td>${esc(enc)}</td></tr>
-      <tr><th>발현값 행렬 X</th><td>${X ? `${esc(FORMAT_KO[X.format] || X.format)} · ${esc(X.dtype || "?")}${X.density != null ? " · 밀도 " + pct(X.density) + " · nnz " + num(X.nnz) : ""}` : "없음"}</td></tr>
-      <tr><th>obs 컬럼</th><td>${s.obs ? num(s.obs.nColumns) + "개" : "없음"}</td></tr>
-      <tr><th>var 컬럼</th><td>${s.var ? num(s.var.nColumns) + "개" : "없음"}</td></tr>
-      <tr><th>layers / obsm / varm / obsp / varp</th><td>${mappingCounts(s)}</td></tr>
-      <tr><th>uns (비정형)</th><td>${unsCount(s.uns)}</td></tr>
-      <tr><th>raw</th><td>${s.raw ? "있음" : "없음"}</td></tr>
-      <tr><th>열기 시간</th><td>${ms} ms</td></tr>
-    </table>`;
+    <dl class="facts">${facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`).join("")}</dl>`;
   return sec;
 }
 
@@ -908,11 +910,11 @@ function renderMatrixSlice(box, d) {
 
 // ---- dataframe (obs / var) --------------------------------------
 
-function dataframeSection(title, df, rowWord, emptyNote) {
+function dataframeSection(title, df, rowWord) {
   const sec = document.createElement("section");
   sec.className = "card";
   if (!df) {
-    sec.innerHTML = `<h2>${esc(title)}</h2><p class="prose">이 파일에는 ${esc(title)}가 없습니다.</p>`;
+    sec.innerHTML = `<h2>${esc(title)}</h2><p class="muted">${esc(title)} 없음.</p>`;
     return sec;
   }
   const idx = df.index || {};
@@ -929,12 +931,12 @@ function dataframeSection(title, df, rowWord, emptyNote) {
 
   sec.innerHTML = `
     <h2>${esc(title)}</h2>
-    <p class="prose">${num(df.nRows)}개의 ${esc(rowWord)}. 인덱스: <span class="mono">${esc(df.indexName)}</span>
-      (${esc(kindKo(idx.kind || "string"))}${idx.nullable ? ", 결측 허용" : ""}).</p>
+    <p class="prose">${esc(rowWord)} ${num(df.nRows)}개 · 인덱스 <span class="mono">${esc(df.indexName)}</span>
+      — ${esc(kindKo(idx.kind || "string"))}${idx.nullable ? ", 결측 허용" : ""}.</p>
     ${
       df.columns.length
         ? `<table class="grid"><thead><tr><th>컬럼</th><th>종류</th><th>자료형</th><th>비고</th></tr></thead><tbody>${rows}</tbody></table>`
-        : `<p class="muted">${esc(emptyNote)}</p>`
+        : `<p class="muted">추가 컬럼 없음 — 인덱스(이름)만 존재.</p>`
     }`;
   return sec;
 }
@@ -957,7 +959,7 @@ function mappingSection(s) {
     .map((name) => {
       const map = s[name] || {};
       const keys = Object.keys(map);
-      if (!keys.length) return `<div class="mapblock"><h3>${name}</h3><p class="muted">없음</p></div>`;
+      if (!keys.length) return `<div class="mapblock"><h3>${name}</h3><p class="muted">없음.</p></div>`;
       const items = keys
         .map((k) => {
           const v = map[k];
@@ -986,7 +988,7 @@ function unsSection(uns) {
   sec.className = "card";
   const keys = Object.keys(uns || {}).filter((k) => k !== "__truncated__");
   if (!keys.length) {
-    sec.innerHTML = `<h2>비정형 데이터 (uns)</h2><p class="muted">없음</p>`;
+    sec.innerHTML = `<h2>비정형 데이터 (uns)</h2><p class="muted">없음.</p>`;
     return sec;
   }
   sec.innerHTML = `<h2>비정형 데이터 (uns)</h2>`;
@@ -1030,7 +1032,7 @@ function rawSection(raw) {
   sec.className = "card";
   const X = raw.X;
   sec.innerHTML = `<h2>raw</h2>
-    <p class="prose">정규화 이전 원본 카운트가 <span class="mono">raw</span>에 보관되어 있습니다.</p>
+    <p class="prose">정규화 이전 원본 카운트. <span class="mono">raw.X</span> / <span class="mono">raw.var</span> 로 접근.</p>
     <table class="kv">
       <tr><th>raw.X</th><td>${X ? `${esc(FORMAT_KO[X.format] || X.format)} ${shapeStr(X.shape)} · ${esc(X.dtype || "?")}${X.density != null ? " · 밀도 " + pct(X.density) : ""}` : "없음"}</td></tr>
       <tr><th>raw.var</th><td>${raw.var ? `${num(raw.var.nRows)} 유전자 · ${num(raw.var.nColumns)} 컬럼` : "없음"}</td></tr>

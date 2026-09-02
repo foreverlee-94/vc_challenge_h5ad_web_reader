@@ -80,8 +80,8 @@ button { font: inherit; }
 }
 #topnav button.active { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
 
-main { max-width: 1100px; margin: 0 auto; padding: 0 20px; }
-footer { max-width: 1100px; margin: 48px auto 32px; padding: 0 20px; color: var(--muted); font-size: 12px; }
+main { max-width: 1600px; margin: 0 auto; padding: 0 24px; }
+footer { max-width: 1600px; margin: 48px auto 32px; padding: 0 24px; color: var(--muted); font-size: 12px; }
 footer a { color: inherit; }
 
 /* intro (shown until a file is open) */
@@ -123,6 +123,37 @@ body.dragging::after {
 
 .tab { padding: 8px 0 24px; }
 .explain { margin: 8px 0 12px; }
+
+/* overview: responsive grid that uses the full width */
+#tab-overview {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+#tab-overview .card { margin: 0; }
+.ov12 { grid-column: span 12; }
+.ov8 { grid-column: span 8; }
+.ov6 { grid-column: span 6; }
+.ov4 { grid-column: span 4; }
+@media (max-width: 1180px) {
+  .ov8, .ov6, .ov4 { grid-column: span 12; }
+}
+
+/* fact grid inside the summary card */
+dl.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 1px;
+  margin: 14px 0 0;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+dl.facts > div { background: var(--bg); padding: 9px 12px; }
+dl.facts dt { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+dl.facts dd { margin: 0; font-family: var(--mono); font-size: 13px; word-break: break-word; }
 
 /* cards (overview / raw) */
 h2 { font-size: 17px; margin: 0 0 10px; }
