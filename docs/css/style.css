@@ -47,7 +47,7 @@ button { font: inherit; }
   z-index: 10;
   background: var(--bg);
   border-bottom: 1px solid var(--line);
-  padding: 10px 20px 0;
+  padding: 10px 20px 10px;
 }
 #topbar .brand { display: flex; align-items: baseline; gap: 10px; }
 #topbar .brand strong { font-size: 16px; }
@@ -68,7 +68,7 @@ button { font: inherit; }
 #filebar { display: inline-flex; align-items: center; gap: 8px; }
 #filebar-name { font-weight: 600; }
 
-#topnav { display: flex; gap: 4px; margin-top: 8px; }
+#topnav { display: flex; gap: 4px; margin-top: 10px; margin-bottom: -10px; }
 #topnav button {
   padding: 7px 16px;
   border: 0;
