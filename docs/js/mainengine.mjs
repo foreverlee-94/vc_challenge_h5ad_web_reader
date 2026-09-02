@@ -6,7 +6,7 @@
 import { ready, File as H5File } from "../vendor/h5wasm/hdf5_hl.js";
 import { summarize } from "./anndata.mjs";
 import { buildReport } from "./hdf5tree.mjs";
-import { readColumn, readUnsNode, matrixWithLabels, axisIndex } from "./reads.mjs";
+import { readColumn, readUnsNode, matrixWithLabels, axisIndex, columnPage } from "./reads.mjs";
 
 let Module = null;
 let FS = null;
@@ -51,6 +51,8 @@ export const mainEngine = {
         return open(payload.file, onProgress);
       case "column":
         return Promise.resolve().then(() => readColumn(need(), payload.axis, payload.key));
+      case "columnPage":
+        return Promise.resolve().then(() => columnPage(need(), payload.axis, payload.key, payload.offset, payload.count));
       case "matrix":
         return Promise.resolve().then(() => matrixWithLabels(need(), payload));
       case "unsNode":

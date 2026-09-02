@@ -65,16 +65,8 @@ export function readColumn(file, axis, key) {
   const node = child(grp, name);
   if (!node) throw new Error(`${axis}/${name} 없음`);
 
-  const labelHead = (n) => {
-    const ds = indexDataset(file, axis);
-    try {
-      return Array.from(ds.slice([[0, Math.min(n, normAttr(ds.shape)[0])]]), String);
-    } catch (_) {
-      return null;
-    }
-  };
-
   let result = { axis, key: name, isIndex };
+  const head = () => columnPage(file, axis, name, 0, PREVIEW).rows;
 
   if (isGroup(node)) {
     const enc = encodingOf(node);
@@ -84,7 +76,7 @@ export function readColumn(file, axis, key) {
       const labels = codes.map((c) => (c < 0 || c >= cats.length ? "(결측)" : cats[c]));
       const vc = valueCounts(labels, 100);
       result = { ...result, kind: "categorical", n, approx, ordered: !!attr(node, "ordered"), nCategories: cats.length, ...vc };
-      result.preview = buildPreview(labelHead(PREVIEW), labels);
+      result.preview = head();
       return result;
     }
     if (enc === "nullable-integer" || enc === "nullable-boolean") {
@@ -98,7 +90,7 @@ export function readColumn(file, axis, key) {
       } else {
         result = { ...result, kind: "numeric", n, approx, nMissing, stats: numericStats(clean), histogram: histogram(clean) };
       }
-      result.preview = buildPreview(labelHead(PREVIEW), clean);
+      result.preview = head();
       return result;
     }
     if (enc === "nullable-string-array" || enc === "string-array") {
@@ -111,7 +103,7 @@ export function readColumn(file, axis, key) {
         for (let i = 0; i < clean.length; i++) if (mask[i]) (clean[i] = "(결측)"), nMissing++;
       }
       result = { ...result, kind: "string", n, approx, nMissing, ...valueCounts(clean.map(String), 50) };
-      result.preview = buildPreview(labelHead(PREVIEW), clean);
+      result.preview = head();
       return result;
     }
     throw new Error(`지원하지 않는 컬럼 인코딩: ${enc}`);
@@ -129,19 +121,60 @@ export function readColumn(file, axis, key) {
     const s = vals.map(String);
     result = { ...result, kind: "string", n, approx, nMissing: 0, ...valueCounts(s, 50) };
   }
-  result.preview = buildPreview(labelHead(PREVIEW), vals);
+  result.preview = head();
   return result;
 }
 
-function buildPreview(labels, values) {
-  const out = [];
-  const k = Math.min(PREVIEW, values.length);
-  for (let i = 0; i < k; i++) {
-    let v = values[i];
-    if (typeof v === "number" && Number.isNaN(v)) v = "(결측)";
-    out.push({ i, label: labels ? labels[i] : String(i), value: v });
+// One page of a column's raw values, aligned to real row indices [offset, offset+count).
+export function columnPage(file, axis, key, offset = 0, count = 100) {
+  const grp = file.get(axis);
+  if (!grp) throw new Error(`${axis} 없음`);
+  const indexName = attr(grp, "_index") || "_index";
+  const name = key === "__index__" || key === indexName ? indexName : key;
+  const node = child(grp, name);
+  if (!node) throw new Error(`${axis}/${name} 없음`);
+
+  let total;
+  let valSlice;
+
+  if (isGroup(node)) {
+    const enc = encodingOf(node);
+    if (enc === "categorical") {
+      const cats = toArr(child(node, "categories").value).map(String);
+      const codesDs = child(node, "codes");
+      total = normAttr(codesDs.shape)[0];
+      valSlice = (s, e) => toArr(codesDs.slice([[s, e]])).map((c) => (c < 0 || c >= cats.length ? "(결측)" : cats[c]));
+    } else if (["nullable-integer", "nullable-boolean", "nullable-string-array", "string-array"].includes(enc)) {
+      const valuesDs = child(node, "values");
+      const maskDs = child(node, "mask");
+      const isBool = enc === "nullable-boolean";
+      total = normAttr(valuesDs.shape)[0];
+      valSlice = (s, e) => {
+        const vs = toArr(valuesDs.slice([[s, e]]));
+        const ms = maskDs ? toArr(maskDs.slice([[s, e]])) : null;
+        return vs.map((v, k) => (ms && ms[k] ? "(결측)" : isBool ? (v ? "참" : "거짓") : v));
+      };
+    } else {
+      throw new Error(`지원하지 않는 컬럼 인코딩: ${enc}`);
+    }
+  } else {
+    total = normAttr(node.shape)[0];
+    const ti = typeInfo(node.metadata);
+    valSlice = (s, e) => {
+      const vs = toArr(node.slice([[s, e]]));
+      return ti.cls === "bool" ? vs.map((v) => (v ? "참" : "거짓")) : vs;
+    };
   }
-  return out;
+
+  const s = Math.max(0, Math.min(offset | 0, total));
+  const e = Math.max(s, Math.min(s + (count | 0), total));
+  const idxDs = indexDataset(file, axis);
+  let labels = null;
+  try {
+    labels = Array.from(idxDs.slice([[s, e]]), String);
+  } catch (_) {}
+  const rows = valSlice(s, e).map((v, k) => ({ i: s + k, label: labels ? labels[k] : String(s + k), value: v }));
+  return { offset: s, count: e - s, n: total, rows };
 }
 
 // ---- matrix slice ------------------------------------------------

@@ -286,6 +286,26 @@ table.matrix thead th:first-child { left: 0; z-index: 3; }
 table.matrix td { padding: 3px 8px; border: 1px solid var(--line); text-align: right; }
 table.matrix td.z { color: var(--muted); opacity: 0.4; }
 
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 20px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.pager button {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  padding: 3px 10px;
+  margin-left: 6px;
+}
+.pager button:disabled { opacity: 0.35; cursor: default; }
+
 .chart { max-width: 100%; height: auto; margin: 8px 0; display: block; }
 .chart .bar { fill: var(--accent); }
 .chart .lbl, .chart .num { fill: var(--muted); font-size: 11px; font-family: var(--mono); }

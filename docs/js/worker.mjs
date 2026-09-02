@@ -8,7 +8,7 @@
 import { ready, File as H5File } from "../vendor/h5wasm/hdf5_hl.js";
 import { summarize } from "./anndata.mjs";
 import { buildReport } from "./hdf5tree.mjs";
-import { readColumn, readUnsNode, matrixWithLabels, axisIndex } from "./reads.mjs";
+import { readColumn, readUnsNode, matrixWithLabels, axisIndex, columnPage } from "./reads.mjs";
 
 const MOUNT = "/work";
 let Module = null;
@@ -60,6 +60,7 @@ function need() {
 const OPS = {
   open: (p) => open(p.file),
   column: (p) => readColumn(need(), p.axis, p.key),
+  columnPage: (p) => columnPage(need(), p.axis, p.key, p.offset, p.count),
   matrix: (p) => matrixWithLabels(need(), p),
   unsNode: (p) => readUnsNode(need(), p.path),
   axisIndex: (p) => axisIndex(need(), p.axis),

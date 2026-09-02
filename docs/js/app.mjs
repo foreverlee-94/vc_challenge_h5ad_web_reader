@@ -147,7 +147,13 @@ const FORMAT_KO = { csr: "CSR 희소행렬", csc: "CSC 희소행렬", dense: "�
 
 let openInfo = null; // { file, summary, tree } for the currently open file
 let engineMode = "worker";
-const state = { tab: "overview", path: [], view: null };
+const state = { tab: "overview", path: [], view: null, previewOffset: 0, slice: null };
+
+function resetViewState() {
+  state.view = null;
+  state.previewOffset = 0;
+  state.slice = null;
+}
 
 async function handleFile(file) {
   if (!file) return;
@@ -471,7 +477,7 @@ async function entryFor(path) {
 
 async function selectSeg(colIndex, entry) {
   state.path = state.path.slice(0, colIndex).concat(entry.seg);
-  state.view = null;
+  resetViewState();
   await renderMiller();
 }
 
@@ -488,7 +494,7 @@ function renderBreadcrumb() {
   for (const b of breadcrumbEl.querySelectorAll("button")) {
     b.addEventListener("click", async () => {
       state.path = state.path.slice(0, +b.dataset.i + 1);
-      state.view = null;
+      resetViewState();
       await renderMiller();
     });
   }
@@ -541,11 +547,16 @@ async function showDetail(path, entry) {
 
     if (kind.startsWith("column-")) {
       const axis = path.slice(0, -1).join("/"); // "obs" | "var" | "raw/var"
+      const key = path[path.length - 1];
       const cacheKey = "col:" + path.join("/");
-      const d = lastDetail.key === cacheKey ? lastDetail.data : await eng.call("column", { axis, key: path[path.length - 1] });
+      const d = lastDetail.key === cacheKey ? lastDetail.data : await eng.call("column", { axis, key });
       lastDetail = { key: cacheKey, data: d };
-      renderColumnView(body, state.view, d);
-      enableCsv(csvForColumn(state.view, d));
+      if (state.view === "preview") {
+        await renderColumnPreview(body, axis, key, d, csvBtn, path);
+      } else {
+        renderColumnView(body, state.view, d);
+        enableCsv(csvForColumn(state.view, d));
+      }
       return;
     }
 
@@ -582,6 +593,86 @@ function matrixEntryForPath(path) {
   if (path[0] === "X") return s.X;
   if (path[0] === "raw" && path[1] === "X") return s.raw && s.raw.X;
   return (s[path[0]] || {})[path[1]];
+}
+
+// ---- paging --------------------------------------------------
+
+function pagerHTML(offset, page, total, unit) {
+  const end = Math.min(offset + page, total);
+  const atStart = offset <= 0;
+  const atEnd = end >= total;
+  return `<div class="pager">
+    <button data-p="first"${atStart ? " disabled" : ""}>« 처음</button>
+    <button data-p="prev"${atStart ? " disabled" : ""}>‹ 이전 ${page}${unit}</button>
+    <span>${num(offset + 1)}–${num(end)} / ${num(total)}</span>
+    <button data-p="next"${atEnd ? " disabled" : ""}>다음 ${page}${unit} ›</button>
+    <button data-p="last"${atEnd ? " disabled" : ""}>끝 »</button>
+  </div>`;
+}
+
+function wirePager(container, offset, page, total, go) {
+  for (const btn of container.querySelectorAll(".pager button")) {
+    btn.addEventListener("click", () => {
+      const p = btn.dataset.p;
+      let n = offset;
+      if (p === "first") n = 0;
+      else if (p === "prev") n = Math.max(0, offset - page);
+      else if (p === "next") n = offset + page;
+      else if (p === "last") n = Math.max(0, Math.floor((total - 1) / page) * page);
+      if (n !== offset && n >= 0 && n < total) go(n);
+    });
+  }
+}
+
+const PREVIEW_PAGE = 100;
+
+async function renderColumnPreview(body, axis, key, d, csvBtn, path) {
+  body.innerHTML = `<p class="muted">불러오는 중…</p>`;
+  const eng = await getEngine();
+  const off = state.previewOffset || 0;
+  const pg = await eng.call("columnPage", { axis, key, offset: off, count: PREVIEW_PAGE });
+  const label = key === "__index__" ? "_index" : key;
+  body.innerHTML =
+    `<p class="vhead"><b>${esc(label)}</b> — ${esc(kindKo(d.kind))} · ${num(pg.n)}개</p>` +
+    previewTable(pg.rows, false) +
+    pagerHTML(pg.offset, PREVIEW_PAGE, pg.n, "행");
+  wirePager(body, pg.offset, PREVIEW_PAGE, pg.n, (n) => {
+    state.previewOffset = n;
+    renderColumnPreview(body, axis, key, d, csvBtn, path);
+  });
+  if (csvBtn) {
+    csvBtn.hidden = false;
+    csvBtn.onclick = () =>
+      downloadCSV(`${path.join("_")}_rows_${pg.offset}-${pg.offset + pg.count}.csv`, [["행", "값"], ...pg.rows.map((r) => [r.label, r.value])]);
+  }
+}
+
+function matrixPager(body, path, axes, cur, shape) {
+  const R = shape[0];
+  const C = shape.length > 1 ? shape[1] : 1;
+  const rEnd = Math.min(cur.r0 + cur.rn, R);
+  const cEnd = Math.min(cur.c0 + cur.cn, C);
+  const btn = (txt, dis, ax, delta) => `<button ${dis ? "disabled" : ""} data-ax="${ax}" data-d="${delta}">${txt}</button>`;
+  const div = document.createElement("div");
+  div.className = "pager";
+  div.innerHTML =
+    `<span>행 ${num(cur.r0 + 1)}–${num(rEnd)} / ${num(R)} ${btn("‹ 이전", cur.r0 <= 0, "r", -cur.rn)}${btn("다음 ›", rEnd >= R, "r", cur.rn)}</span>` +
+    `<span>열 ${num(cur.c0 + 1)}–${num(cEnd)} / ${num(C)} ${btn("‹ 이전", cur.c0 <= 0, "c", -cur.cn)}${btn("다음 ›", cEnd >= C, "c", cur.cn)}</span>`;
+  for (const b of div.querySelectorAll("button")) {
+    b.addEventListener("click", () => {
+      const delta = +b.dataset.d;
+      if (b.dataset.ax === "r") {
+        cur.r0 = Math.min(Math.max(0, R - cur.rn), Math.max(0, cur.r0 + delta));
+        if (el("s-r0")) el("s-r0").value = cur.r0;
+      } else {
+        cur.c0 = Math.min(Math.max(0, C - cur.cn), Math.max(0, cur.c0 + delta));
+        if (el("s-c0")) el("s-c0").value = cur.c0;
+      }
+      state.slice = { ...cur };
+      runSlice(el("detail-body"), path, axes, null);
+    });
+  }
+  body.appendChild(div);
 }
 
 async function buildSliceControls(box, path, axes) {
@@ -641,7 +732,9 @@ async function runSlice(body, path, axes, enableCsv) {
   try {
     const eng = await getEngine();
     const data = await eng.call("matrix", { path: pathToEnginePath(path), r0, rn, c0, cn, ...axes });
+    state.slice = { r0, rn, c0, cn };
     renderMatrixSlice(body, data);
+    matrixPager(body, path, axes, { r0, rn, c0, cn }, data.shape);
     if (typeof enableCsv === "function") enableCsv(csvForMatrix(data));
     const b = el("csvbtn");
     if (b) {
@@ -750,10 +843,12 @@ function statsTable(st) {
   return `<table class="kv">${rows.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join("")}</table>`;
 }
 
-function previewTable(rows) {
+function previewTable(rows, footer = true) {
   if (!rows.length) return `<p class="muted">표시할 값이 없습니다.</p>`;
   const body = rows.map((r) => `<tr><td class="mono">${esc(r.label)}</td><td class="n">${fmtCell(r.value)}</td></tr>`).join("");
-  return `<div class="tablescroll"><table class="freq"><thead><tr><th>행</th><th class="n">값</th></tr></thead><tbody>${body}</tbody></table></div><p class="muted">앞 ${rows.length}개</p>`;
+  return `<div class="tablescroll"><table class="freq"><thead><tr><th>행</th><th class="n">값</th></tr></thead><tbody>${body}</tbody></table></div>${
+    footer ? `<p class="muted">앞 ${rows.length}개</p>` : ""
+  }`;
 }
 
 function renderUnsView(box, view, d, label) {

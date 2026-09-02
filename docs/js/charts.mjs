@@ -4,31 +4,46 @@ function escXml(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
-// items: [{ value, count }]
-export function barChartSVG(items, { max = 20, width = 560 } = {}) {
+// Vertical bar chart. items: [{ value, count }]
+export function barChartSVG(items, { max = 24, width = 640, height = 300 } = {}) {
   const rows = items.slice(0, max);
   if (!rows.length) return `<p class="muted">표시할 값이 없습니다.</p>`;
   let vmax = 1;
   for (const r of rows) if (r.count > vmax) vmax = r.count;
-  const bh = 18,
-    gap = 6,
-    labelW = 150,
-    numW = 70,
-    padY = 8;
-  const h = padY * 2 + rows.length * (bh + gap);
-  const trackW = width - labelW - numW;
+
+  const padL = 44,
+    padR = 12,
+    padT = 18,
+    padB = 78;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+  const step = plotW / rows.length;
+  const bw = Math.min(46, step * 0.68);
+
   const bars = rows
     .map((r, i) => {
-      const y = padY + i * (bh + gap);
-      const w = Math.max(1, (trackW * r.count) / vmax);
+      const bh = (plotH * r.count) / vmax;
+      const cx = padL + i * step + step / 2;
+      const x = cx - bw / 2;
+      const y = padT + plotH - bh;
+      const ly = padT + plotH + 12;
       return (
-        `<text x="${labelW - 8}" y="${y + bh * 0.72}" text-anchor="end" class="lbl">${escXml(trunc(r.value, 22))}</text>` +
-        `<rect x="${labelW}" y="${y}" width="${w.toFixed(1)}" height="${bh}" rx="2" class="bar"/>` +
-        `<text x="${labelW + w + 6}" y="${y + bh * 0.72}" class="num">${r.count.toLocaleString()}</text>`
+        `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="2" class="bar"/>` +
+        `<text x="${cx.toFixed(1)}" y="${(y - 4).toFixed(1)}" text-anchor="middle" class="num">${r.count.toLocaleString()}</text>` +
+        `<text x="${cx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="end" class="lbl" transform="rotate(-40 ${cx.toFixed(1)} ${ly.toFixed(1)})">${escXml(
+          trunc(r.value, 18),
+        )}</text>`
       );
     })
     .join("");
-  return `<svg viewBox="0 0 ${width} ${h}" class="chart" preserveAspectRatio="xMinYMin meet" role="img" aria-label="막대그래프">${bars}</svg>`;
+
+  return `<svg viewBox="0 0 ${width} ${height}" class="chart" preserveAspectRatio="xMinYMin meet" role="img" aria-label="막대그래프">
+    ${bars}
+    <line x1="${padL}" y1="${padT + plotH}" x2="${width - padR}" y2="${padT + plotH}" class="axis"/>
+    <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + plotH}" class="axis"/>
+    <text x="${padL - 6}" y="${padT + 4}" text-anchor="end" class="num">${vmax.toLocaleString()}</text>
+    <text x="${padL - 6}" y="${padT + plotH}" text-anchor="end" class="num">0</text>
+  </svg>`;
 }
 
 // hist: { edges:[...], counts:[...] }
