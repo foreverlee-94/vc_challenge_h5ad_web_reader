@@ -23,6 +23,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const chrome = spawn(
   CHROME,
   ["--headless=new", "--disable-gpu", "--no-sandbox", "--no-first-run", "--disable-extensions",
+   `--window-size=${process.env.WIN || "1440,960"}`,
    `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, "about:blank"],
   { stdio: "ignore" },
 );
@@ -115,6 +116,15 @@ if (process.env.EVAL) {
   console.log("\n===== EVAL =====\n" + JSON.stringify(r?.result?.value ?? r?.exceptionDetails ?? "(nothing)", null, 2));
 } else {
   console.log("\n===== #report =====\n" + (await dump("#report")));
+}
+
+if (process.env.SHOT) {
+  const { writeFileSync } = await import("node:fs");
+  const r = await cmd("Page.captureScreenshot", { format: "png", captureBeyondViewport: true });
+  if (r && r.data) {
+    writeFileSync(process.env.SHOT, Buffer.from(r.data, "base64"));
+    console.log("\nscreenshot -> " + process.env.SHOT);
+  }
 }
 
 ws.close();

@@ -494,7 +494,7 @@ function renderBreadcrumb() {
 }
 
 function clearDetail() {
-  detailEl.innerHTML = "";
+  detailEl.innerHTML = `<p class="muted detail-empty">왼쪽에서 잎(값) 항목을 선택하면 여기에 표시됩니다.</p>`;
 }
 
 // ---- detail pane --------------------------------------------
