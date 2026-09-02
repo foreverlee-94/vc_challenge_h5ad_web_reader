@@ -92,10 +92,10 @@ async function getEngine() {
 // ---- DOM + formatting -------------------------------------------------
 
 const el = (id) => document.getElementById(id);
-const drop = el("drop");
 const fileInput = el("file");
+const openBtn = el("openbtn");
+const intro = el("intro");
 const statusBox = el("status");
-const picker = el("picker");
 const topnav = el("topnav");
 const filebar = el("filebar");
 const warnBox = el("warn");
@@ -178,7 +178,8 @@ async function handleFile(file) {
     openInfo = info;
     labelCache = {};
     setStatus(`열림: ${file.name} · ${ms} ms${eng.mode === "main" ? " · 메인 스레드 모드(파일 전체 메모리 로드)" : ""}`, "ok");
-    picker.hidden = true;
+    intro.hidden = true;
+    openBtn.hidden = true;
     topnav.hidden = false;
     filebar.hidden = false;
     el("filebar-name").textContent = file.name;
@@ -1092,32 +1093,39 @@ function renderNode(node) {
 
 // ---- events -------------------------------------------------
 
+const pickFile = () => {
+  fileInput.value = "";
+  fileInput.click();
+};
+
 fileInput.addEventListener("change", () => handleFile(fileInput.files[0]));
+openBtn.addEventListener("click", pickFile);
+el("filebar-change").addEventListener("click", pickFile);
 
 for (const b of topnav.querySelectorAll("button")) {
   b.addEventListener("click", () => setTab(b.dataset.tab));
 }
-el("filebar-change").addEventListener("click", () => {
-  picker.hidden = false;
-  fileInput.value = "";
-  fileInput.click();
-});
 
-["dragenter", "dragover"].forEach((t) =>
-  drop.addEventListener(t, (e) => {
-    e.preventDefault();
-    drop.classList.add("over");
-  }),
-);
-["dragleave", "drop"].forEach((t) =>
-  drop.addEventListener(t, (e) => {
-    e.preventDefault();
-    drop.classList.remove("over");
-  }),
-);
-drop.addEventListener("drop", (e) => {
+// drag & drop anywhere on the window
+let dragDepth = 0;
+window.addEventListener("dragenter", (e) => {
+  e.preventDefault();
+  if (dragDepth++ === 0) document.body.classList.add("dragging");
+});
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("dragleave", (e) => {
+  e.preventDefault();
+  if (--dragDepth <= 0) {
+    dragDepth = 0;
+    document.body.classList.remove("dragging");
+  }
+});
+window.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  document.body.classList.remove("dragging");
   const f = e.dataTransfer?.files?.[0];
   if (f) handleFile(f);
 });
 
-setStatus("h5ad 파일을 선택하거나 여기에 끌어다 놓으세요. 파일은 브라우저 안에서만 열립니다 — 어디에도 업로드되지 않습니다.", "info");
+setStatus("", "info");
