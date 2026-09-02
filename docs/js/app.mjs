@@ -418,6 +418,7 @@ async function renderMiller() {
     }
     millerEl.appendChild(millerColumn(kids, i, state.path[i]));
   }
+  millerEl.scrollLeft = millerEl.scrollWidth;
   renderBreadcrumb();
   if (leafReached) {
     const entry = await entryFor(state.path);

@@ -153,7 +153,10 @@ ul.unstree details > summary { cursor: pointer; }
 .card .attrs .ak { color: var(--fg); }
 .card .more { color: var(--muted); font-size: 12px; padding: 3px 0 3px 1em; }
 
-/* explore: breadcrumb + miller columns + detail */
+/* explore: full-bleed — LNB flush to the left wall, detail fills the right */
+.tab-full { padding: 8px 0 24px; }
+.tab-full .ex-head { max-width: 1100px; margin: 0 auto; padding: 0 20px; }
+
 #breadcrumb { font-size: 13px; margin: 4px 0 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
 #breadcrumb button {
   border: 0; background: none; color: var(--accent); cursor: pointer; padding: 2px 4px; font-family: var(--mono); font-size: 12px;
@@ -162,44 +165,42 @@ ul.unstree details > summary { cursor: pointer; }
 
 #explore-body {
   display: flex;
-  gap: 16px;
   align-items: stretch;
+  border-top: 1px solid var(--line);
 }
 #miller {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   align-self: flex-start;
-  max-width: 62%;
+  max-width: 46vw;
   display: flex;
-  gap: 0;
   overflow-x: auto;
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  scroll-snap-type: x proximity;
   background: var(--card);
-  min-height: 200px;
-  max-height: 72vh;
+  border-right: 1px solid var(--line);
+  min-height: 260px;
+  max-height: 78vh;
 }
 .mcol {
-  flex: 0 0 202px;
+  flex: 0 0 200px;
   border-right: 1px solid var(--line);
   overflow-y: auto;
   padding: 4px;
+  scroll-snap-align: start;
 }
 .mcol:last-child { border-right: 0; }
 
 #detail {
   flex: 1 1 0;
   min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 16px;
+  padding: 18px 24px 18px 22px;
   align-self: flex-start;
 }
 .detail-empty { margin: 0; }
 
-@media (max-width: 900px) {
+@media (max-width: 720px) {
   #explore-body { flex-direction: column; }
-  #miller { max-width: 100%; width: 100%; max-height: 360px; }
-  #detail { width: 100%; }
+  #miller { max-width: 100%; width: 100%; max-height: 340px; border-right: 0; border-bottom: 1px solid var(--line); }
+  #detail { width: 100%; padding: 16px 20px; }
 }
 .mitem {
   display: flex;
