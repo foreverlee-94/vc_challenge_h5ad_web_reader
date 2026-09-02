@@ -34,17 +34,31 @@ docs/ (GitHub Pages 루트)
   index.html
   css/style.css
   js/
-    app.mjs       메인 스레드 UI: 파일 선택, 드롭다운, 표/그래프 렌더
-    worker.mjs    Web Worker: h5wasm, WORKERFS 마운트, 모든 읽기
-    anndata.mjs   [Phase 1] AnnData-on-HDF5 해석 (인코딩 규약)
+    app.mjs       메인 스레드 UI + 엔진 선택(worker → main 폴백), 렌더
+    worker.mjs    Web Worker 엔진: h5wasm + WORKERFS 지연 마운트
+    mainengine.mjs 메인 스레드 폴백 엔진: h5wasm + MEMFS(전체 메모리)
+    hdf5tree.mjs  두 엔진 공용: 원본 HDF5 트리 순회
+    anndata.mjs   AnnData-on-HDF5 의미 해석 (인코딩 규약)
     stats.mjs     [Phase 2] 수치/범주/문자열 통계, 히스토그램 빈
     charts.mjs    [Phase 3] SVG 막대·히스토그램
   vendor/h5wasm/  hdf5_hl.js, hdf5_util.js (벤더링, 무수정)
 
 scripts/          (개발·검증용, Pages 미포함)
   expected_summary.py   anndata/h5py 기반 정답 요약 → JS 결과 대조
+  summary_h5wasm.mjs    브라우저 파서(anndata.mjs)를 Node에서 실행해 대조
   smoke_h5wasm.mjs      벤더링된 h5wasm이 실제 파일을 읽는지 확인
+  make_fixture.py       모든 인코딩을 담은 작은 테스트 h5ad 생성(scratchpad/)
+  browser_probe.mjs     의존성 없는 CDP 드라이버(헤드리스 Chrome 회귀 테스트)
 ```
+
+**엔진 폴백**: `app.mjs`가 모듈 Web Worker를 8초 타임아웃 + `onerror`로 부팅
+시도 → 실패 시 `mainengine.mjs`(메인 스레드, MEMFS)로 자동 전환. `?engine=main`
+으로 강제 가능. 이전에 워커 부팅 실패 시 오류가 표면화되지 않아 "로딩이 안돼"
+증상이 있었음 → 수정됨.
+
+**주의**: 헤드리스 Chrome의 `--virtual-time-budget`은 워커 내 WASM 인스턴스화를
+멈추게 함(실제 브라우저 버그 아님). 회귀 테스트는 `browser_probe.mjs`(실시간 CDP)
+로만 신뢰할 것.
 
 메시지 프로토콜(app ↔ worker): `{id, type, payload}` 요청 / `{id, ok, result|error}` 응답.
 연산: `open`, `summary`, `column`, `matrixSlice`, `unsNode`.
@@ -72,7 +86,9 @@ scripts/          (개발·검증용, Pages 미포함)
 
 - **Phase 0 — 스캐폴드 (완료)**: git init, `docs/` 골격, h5wasm 벤더링, uv 의존성 정리,
   검증 스크립트, 원본 HDF5 트리를 보여주는 최소 수직 슬라이스 (WORKERFS 마운트 포함).
-- **Phase 1 — 파서**: `anndata.mjs`로 구조 → 요약 객체. `expected_summary.py`와 대조.
+- **Phase 1 — 파서 (완료)**: `anndata.mjs`로 구조 → 요약 객체, 일상어 개요 UI.
+  `expected_summary.py`와 대조(context_A/B/C + fixture). 엔진 폴백 + 오류 표면화 추가,
+  헤드리스 Chrome 실시간 CDP로 워커/폴백/225MB 파일 검증.
 - **Phase 2 — 읽기 연산**: `readColumn`(코드→라벨), `readMatrixSlice`(CSR), `readUnsNode`, 통계.
 - **Phase 3 — 드롭다운 UI**: 연쇄 셀렉터 + 보기별 렌더 + 개요 패널 + 차트.
 - **Phase 4 — 마무리**: 로딩/에러 표시, 대용량·Safari 경고, README, 첫 Pages 배포 확인.
