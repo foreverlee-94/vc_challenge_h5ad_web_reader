@@ -111,9 +111,14 @@ function closeCurrent() {
   } catch (_) {}
 }
 
+let progressTarget = null;
+const step = (msg) => progressTarget && self.postMessage({ id: progressTarget, progress: msg });
+
 async function open(file) {
+  step("WASM 초기화 중…");
   await ensureReady();
   closeCurrent();
+  step("파일 마운트 중…");
   try {
     FS.mkdir(MOUNT);
   } catch (_) {
@@ -122,10 +127,13 @@ async function open(file) {
   // WORKERFS reads lazily from the Blob via FileReaderSync — no full copy.
   FS.mount(FS.filesystems.WORKERFS, { files: [file] }, MOUNT);
   const path = `${MOUNT}/${file.name}`;
+  step("HDF5 열기…");
   const h5 = new H5File(path, "r");
   current = { h5, path };
 
+  step("구조 분석 중…");
   const summary = summarize(h5);
+  step("트리 생성 중…");
   const tree = describe(h5, file.name, 0, { maxDepth: 8, maxChildren: 500 });
 
   return {
@@ -139,6 +147,7 @@ async function open(file) {
 
 self.onmessage = async (ev) => {
   const { id, type, payload } = ev.data || {};
+  progressTarget = id;
   try {
     let result;
     switch (type) {
@@ -150,7 +159,9 @@ self.onmessage = async (ev) => {
     }
     self.postMessage({ id, ok: true, result });
   } catch (err) {
-    self.postMessage({ id, ok: false, error: err && err.message ? err.message : String(err) });
+    self.postMessage({ id, ok: false, error: err && err.stack ? err.stack : String(err) });
+  } finally {
+    progressTarget = null;
   }
 };
 

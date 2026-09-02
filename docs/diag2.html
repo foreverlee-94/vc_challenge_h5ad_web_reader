@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>diag2</title></head>
+<body><pre id="log">diag2 start
+</pre>
+<script type="module">
+const el = document.getElementById("log");
+const log = (...a) => { el.textContent += a.join(" ") + "\n"; console.log("[diag2]", ...a); };
+window.onerror = (m,s,l,c,e) => log("onerror", m, e&&e.stack);
+window.onunhandledrejection = (ev) => log("unhandledrejection", ev.reason && ev.reason.stack || ev.reason);
+try {
+  log("importing hdf5_hl.js on MAIN thread");
+  const t0 = performance.now();
+  const mod = await import("./vendor/h5wasm/hdf5_hl.js");
+  log("imported, awaiting ready");
+  const M = await mod.ready;
+  log("ready resolved in", Math.round(performance.now()-t0), "ms; FS?", !!M.FS, "WORKERFS?", !!(M.FS && M.FS.filesystems && M.FS.filesystems.WORKERFS));
+  // try reading fixture via MEMFS
+  const buf = new Uint8Array(await (await fetch("./fixture.h5ad")).arrayBuffer());
+  M.FS.writeFile("m.h5ad", buf);
+  const f = new mod.File("m.h5ad", "r");
+  log("MEMFS open OK, root keys:", JSON.stringify(f.keys()));
+  f.close();
+  log("MAIN-THREAD SUCCESS");
+} catch (e) { log("CAUGHT", e && e.stack || String(e)); }
+el.textContent += "__DIAG_DONE__\n";
+</script>
+</body></html>
