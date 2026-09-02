@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>h5ad 뷰어</title>
+    <link rel="stylesheet" href="./css/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>h5ad 뷰어</h1>
+      <p class="lede">
+        단일세포 데이터 파일(<code>.h5ad</code>) 안에 무엇이 들어있는지 브라우저에서 바로 확인합니다.
+        파일은 <strong>이 브라우저 안에서만</strong> 열리며 서버로 전송되지 않습니다.
+      </p>
+    </header>
+
+    <main>
+      <section id="picker">
+        <label id="drop" for="file">
+          <span class="big">파일 선택 또는 끌어다 놓기</span>
+          <span class="hint">.h5ad / .h5 / .hdf5</span>
+          <input id="file" type="file" accept=".h5ad,.h5,.hdf5" hidden />
+        </label>
+        <p id="status" data-kind="info"></p>
+      </section>
+
+      <section id="summary" hidden></section>
+      <section id="tree"></section>
+    </main>
+
+    <footer>
+      <p>
+        HDF5 읽기: <a href="https://github.com/usnistgov/h5wasm">h5wasm</a> 0.10.3 (WebAssembly).
+        전부 클라이언트 사이드 · GitHub Pages 정적 호스팅.
+      </p>
+    </footer>
+
+    <script type="module" src="./js/app.mjs"></script>
+  </body>
+</html>

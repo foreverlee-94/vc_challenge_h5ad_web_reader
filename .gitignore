@@ -1,0 +1,23 @@
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+
+# Large data files (the challenge h5ad files live here but are not tracked)
+*.h5ad
+*.h5
+*.hdf5
+
+# Challenge input data — not part of the tool (uncomment-track if you want them in the repo)
+/manifest.json
+/gene_names.csv
+/pert_counts.csv
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Node smoke-test scratch
+scripts/in.h5ad
