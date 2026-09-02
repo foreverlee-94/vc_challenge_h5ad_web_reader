@@ -86,6 +86,9 @@ await cmd("Runtime.enable");
 await cmd("Log.enable");
 await cmd("Page.enable");
 await cmd("DOM.enable");
+if (process.env.MEDIA) {
+  await cmd("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: process.env.MEDIA }] });
+}
 
 const setFile = process.env.SETFILE;
 console.log(`opened ${url} ; waiting ${waitMs}ms` + (setFile ? ` ; will set #file=${setFile}` : ""));
