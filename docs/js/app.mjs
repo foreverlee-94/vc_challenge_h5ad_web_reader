@@ -147,11 +147,12 @@ const FORMAT_KO = { csr: "CSR 희소행렬", csc: "CSC 희소행렬", dense: "�
 
 let openInfo = null; // { file, summary, tree } for the currently open file
 let engineMode = "worker";
-const state = { tab: "overview", path: [], view: null, previewOffset: 0, slice: null };
+const state = { tab: "overview", path: [], view: null, previewOffset: 0, freqOffset: 0, slice: null };
 
 function resetViewState() {
   state.view = null;
   state.previewOffset = 0;
+  state.freqOffset = 0;
   state.slice = null;
 }
 
@@ -531,6 +532,8 @@ async function showDetail(path, entry) {
   for (const b of detailEl.querySelectorAll(".views button")) {
     b.addEventListener("click", () => {
       state.view = b.dataset.v;
+      state.previewOffset = 0;
+      state.freqOffset = 0;
       showDetail(path, entry);
     });
   }
@@ -807,25 +810,47 @@ function fmtCell(v) {
   return String(Number(v.toFixed(4)));
 }
 
-function freqTable(items, more, total) {
-  const rows = items
-    .map(
-      (r) =>
-        `<tr><td>${esc(r.value)}</td><td class="n">${num(r.count)}</td><td class="n">${total ? ((r.count / total) * 100).toFixed(1) + "%" : "—"}</td></tr>`,
-    )
-    .join("");
-  return `<table class="freq"><thead><tr><th>값</th><th class="n">개수</th><th class="n">비율</th></tr></thead><tbody>${rows}</tbody></table>${
-    more ? `<p class="muted">… 그 외 ${num(more)}개</p>` : ""
-  }`;
+const FREQ_PAGE = 50;
+
+// Paged value/count list — 이전/다음 through all unique values (sorted by count).
+function renderFreqPaged(box, d, headHTML) {
+  const items = d.items || [];
+  const nUnique = d.nUnique ?? items.length;
+  const capped = items.length < nUnique;
+  const draw = () => {
+    const off = Math.min(state.freqOffset || 0, Math.max(0, Math.floor(Math.max(0, items.length - 1) / FREQ_PAGE) * FREQ_PAGE));
+    const pageItems = items.slice(off, off + FREQ_PAGE);
+    const rows = pageItems
+      .map(
+        (r) =>
+          `<tr><td>${esc(r.value)}</td><td class="n">${num(r.count)}</td><td class="n">${
+            d.total ? ((r.count / d.total) * 100).toFixed(1) + "%" : "—"
+          }</td></tr>`,
+      )
+      .join("");
+    box.innerHTML =
+      headHTML +
+      `<div class="tablescroll"><table class="freq"><thead><tr><th>값</th><th class="n">개수</th><th class="n">비율</th></tr></thead><tbody>${rows}</tbody></table></div>` +
+      pagerHTML(off, FREQ_PAGE, items.length, "종") +
+      (capped ? `<p class="muted">고유값이 많아 상위 ${num(items.length)}종만 집계했습니다 (실제 ${num(nUnique)}종).</p>` : "");
+    wirePager(box, off, FREQ_PAGE, items.length, (n) => {
+      state.freqOffset = n;
+      draw();
+    });
+  };
+  draw();
 }
 
 function renderColumnView(box, view, d) {
   const head = `<p class="vhead"><b>${esc(d.key)}</b> — ${esc(kindKo(d.kind))} · ${num(d.n)}개${
     d.approx ? " <span class='muted'>(표본 기준 근사)</span>" : ""
   }${d.nMissing ? ` · 결측 ${num(d.nMissing)}` : ""}${d.nUnique != null ? ` · 고유값 ${num(d.nUnique)}` : ""}</p>`;
+  if (view === "counts") {
+    renderFreqPaged(box, d, head);
+    return;
+  }
   let body = "";
-  if (view === "counts") body = freqTable(d.items || [], d.more, d.total || d.n);
-  else if (view === "bar") body = barChartSVG(d.items || []);
+  if (view === "bar") body = barChartSVG(d.items || []);
   else if (view === "stats") body = statsTable(d.stats);
   else if (view === "hist") body = d.histogram ? histogramSVG(d.histogram) + (d.histogram.single != null ? `<p class="muted">모든 값이 ${fmtCell(d.histogram.single)} 입니다.</p>` : "") : `<p class="muted">히스토그램을 만들 수 없습니다.</p>`;
   else if (view === "preview") body = previewTable(d.preview || []);
@@ -1134,26 +1159,44 @@ window.addEventListener("drop", (e) => {
 
 // ---- resizable columns in the detail pane -------------------
 
+// Add drag handles to a table's column dividers. The table keeps its natural
+// auto layout (full values, fit-content width) until the user actually starts
+// dragging — only then do we lock explicit widths + table-layout:fixed.
 function enhanceResizable(table) {
   if (table.dataset.rz) return;
   const head = (table.tHead && table.tHead.rows[0]) || table.rows[0];
   if (!head || head.cells.length < 2) return;
-  const cells = [...head.cells];
-  const widths = cells.map((c) => Math.round(c.getBoundingClientRect().width));
-  if (widths.some((w) => w < 1)) return; // not laid out yet — retry on next mutation
   table.dataset.rz = "1";
-  table.classList.add("rz");
-  table.style.width = widths.reduce((a, b) => a + b, 0) + "px";
+  const cells = [...head.cells];
+  let locked = false;
+
+  const lock = () => {
+    if (locked) return true;
+    const widths = cells.map((c) => Math.round(c.getBoundingClientRect().width));
+    if (widths.some((w) => w < 1)) return false;
+    cells.forEach((c, i) => (c.style.width = widths[i] + "px"));
+    table.classList.add("rz");
+    table.style.width = widths.reduce((a, b) => a + b, 0) + "px";
+    locked = true;
+    return true;
+  };
+  const unlock = () => {
+    cells.forEach((c) => (c.style.width = ""));
+    table.classList.remove("rz");
+    table.style.width = "";
+    locked = false;
+  };
+
   cells.forEach((th, i) => {
-    th.style.width = widths[i] + "px";
     if (getComputedStyle(th).position === "static") th.style.position = "relative";
     if (i === cells.length - 1) return;
     const grip = document.createElement("span");
     grip.className = "col-grip";
-    grip.title = "드래그하여 열 너비 조절";
+    grip.title = "드래그: 열 너비 조절 · 더블클릭: 자동 맞춤";
     grip.addEventListener("pointerdown", (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (!lock()) return;
       const x0 = e.clientX;
       const w0 = th.getBoundingClientRect().width;
       try {
@@ -1161,7 +1204,7 @@ function enhanceResizable(table) {
       } catch (_) {}
       document.body.classList.add("col-resizing");
       const move = (ev) => {
-        th.style.width = Math.max(44, Math.round(w0 + ev.clientX - x0)) + "px";
+        th.style.width = Math.max(40, Math.round(w0 + ev.clientX - x0)) + "px";
         table.style.width = cells.reduce((a, c) => a + c.getBoundingClientRect().width, 0) + "px";
       };
       const up = () => {
@@ -1172,14 +1215,9 @@ function enhanceResizable(table) {
       document.addEventListener("pointermove", move);
       document.addEventListener("pointerup", up);
     });
-    grip.addEventListener("dblclick", () => {
-      th.style.width = "";
-      table.style.tableLayout = "auto";
-      requestAnimationFrame(() => {
-        cells.forEach((c) => (c.style.width = Math.round(c.getBoundingClientRect().width) + "px"));
-        table.style.tableLayout = "fixed";
-        table.style.width = cells.reduce((a, c) => a + c.getBoundingClientRect().width, 0) + "px";
-      });
+    grip.addEventListener("dblclick", (e) => {
+      e.stopPropagation();
+      unlock();
     });
     th.appendChild(grip);
   });

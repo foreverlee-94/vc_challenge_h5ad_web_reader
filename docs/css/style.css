@@ -221,7 +221,7 @@ ul.unstree details > summary { cursor: pointer; }
 #explore-body {
   display: flex;
   align-items: flex-start;
-  gap: 4px;
+  gap: 16px;
 }
 #miller {
   flex: 0 0 auto;
@@ -230,7 +230,9 @@ ul.unstree details > summary { cursor: pointer; }
   display: flex;
   overflow-x: auto;
   scroll-snap-type: x proximity;
-  border-right: 1px solid var(--line);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
   max-height: 78vh;
 }
 .mcol {
@@ -245,9 +247,20 @@ ul.unstree details > summary { cursor: pointer; }
 #detail {
   flex: 1 1 0;
   min-width: 0;
-  padding: 18px 24px 18px 22px;
+  padding: 0 0 18px;
   align-self: flex-start;
 }
+/* control zones (interaction, not data) sit on the card surface;
+   the value table/chart below stays on the plain page background */
+.detail-head,
+#detail-opts,
+.pager {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 9px 12px;
+}
+#detail-body { padding: 2px; }
 .detail-empty { margin: 0; }
 
 @media (max-width: 720px) {
@@ -280,8 +293,6 @@ ul.unstree details > summary { cursor: pointer; }
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 10px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--line);
   margin-bottom: 12px;
 }
 .detail-head .dtitle { font-weight: 600; }
@@ -338,7 +349,10 @@ table.freq td.n, table.freq th.n { text-align: right; font-family: var(--mono); 
 #detail .tablescroll { width: fit-content; max-width: 100%; }
 #detail table.kv th { width: auto; }
 table.rz { table-layout: fixed; }
-table.rz td, table.rz th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+table.rz td, table.rz th { white-space: normal; overflow-wrap: anywhere; }
+/* value column: show the full value (wrap), never clip */
+#detail table.freq td:first-child,
+#detail table.kv td { white-space: normal; overflow-wrap: anywhere; max-width: 560px; }
 .col-grip {
   position: absolute;
   top: 0;

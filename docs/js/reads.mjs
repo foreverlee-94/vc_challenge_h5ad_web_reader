@@ -74,7 +74,7 @@ export function readColumn(file, axis, key) {
       const cats = toArr(child(node, "categories").value).map(String);
       const { data: codes, n, approx } = readVec(child(node, "codes"));
       const labels = codes.map((c) => (c < 0 || c >= cats.length ? "(결측)" : cats[c]));
-      const vc = valueCounts(labels, 100);
+      const vc = valueCounts(labels, 5000);
       result = { ...result, kind: "categorical", n, approx, ordered: !!attr(node, "ordered"), nCategories: cats.length, ...vc };
       result.preview = head();
       return result;
@@ -102,7 +102,7 @@ export function readColumn(file, axis, key) {
         const mask = readVec(maskDs).data;
         for (let i = 0; i < clean.length; i++) if (mask[i]) (clean[i] = "(결측)"), nMissing++;
       }
-      result = { ...result, kind: "string", n, approx, nMissing, ...valueCounts(clean.map(String), 50) };
+      result = { ...result, kind: "string", n, approx, nMissing, ...valueCounts(clean.map(String), 5000) };
       result.preview = head();
       return result;
     }
@@ -119,7 +119,7 @@ export function readColumn(file, axis, key) {
     result = { ...result, kind: "bool", n, approx, nMissing: 0, ...valueCounts(labels, 10) };
   } else {
     const s = vals.map(String);
-    result = { ...result, kind: "string", n, approx, nMissing: 0, ...valueCounts(s, 50) };
+    result = { ...result, kind: "string", n, approx, nMissing: 0, ...valueCounts(s, 5000) };
   }
   result.preview = head();
   return result;
