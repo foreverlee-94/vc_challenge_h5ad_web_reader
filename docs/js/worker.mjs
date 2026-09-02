@@ -5,6 +5,7 @@
 // column stats, matrix slices) is added in later phases via anndata.mjs.
 
 import { ready, File as H5File } from "../vendor/h5wasm/hdf5_hl.js";
+import { summarize } from "./anndata.mjs";
 
 const MOUNT = "/work";
 let Module = null;
@@ -124,15 +125,12 @@ async function open(file) {
   const h5 = new H5File(path, "r");
   current = { h5, path };
 
-  const rootAttrs = readAttrs(h5);
-  const encoding = rootAttrs["encoding-type"];
+  const summary = summarize(h5);
   const tree = describe(h5, file.name, 0, { maxDepth: 8, maxChildren: 500 });
 
   return {
     file: { name: file.name, size: file.size },
-    encoding: encoding ?? null,
-    encodingVersion: rootAttrs["encoding-version"] ?? null,
-    rootAttrs,
+    summary,
     tree,
   };
 }
