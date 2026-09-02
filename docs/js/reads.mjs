@@ -1,0 +1,252 @@
+// Read operations: pull actual values out of an open h5wasm File.
+// Shared by worker.mjs and mainengine.mjs. Keeps reads bounded (samples large
+// vectors, slices matrices) so a huge file never forces a full decompress.
+
+import { isGroup, attr, encodingOf, child, normAttr, typeInfo } from "./anndata.mjs";
+import { numericStats, histogram, valueCounts } from "./stats.mjs";
+
+const VEC_CAP = 200000; // above this, sample instead of full read
+const PREVIEW = 100;
+
+function toArr(v) {
+  return Array.from(v, (x) => (typeof x === "bigint" ? Number(x) : x));
+}
+
+// Full or evenly-block-sampled 1-D read.
+function readVec(ds) {
+  const n = normAttr(ds.shape)[0] ?? 0;
+  if (n <= VEC_CAP) return { data: toArr(ds.value), n, approx: false };
+  const blocks = 200;
+  const blockSize = Math.max(1, Math.floor(VEC_CAP / blocks));
+  const out = [];
+  for (let b = 0; b < blocks; b++) {
+    const start = Math.min(n - blockSize, Math.floor(((n - blockSize) * b) / (blocks - 1)));
+    const s = Math.max(0, start);
+    out.push(...toArr(ds.slice([[s, s + blockSize]])));
+  }
+  return { data: out, n, approx: true };
+}
+
+// ---- axis labels (obs/var index) ----------------------------------
+
+function indexDataset(file, axis) {
+  const grp = file.get(axis);
+  const indexName = attr(grp, "_index") || "_index";
+  const node = child(grp, indexName);
+  return isGroup(node) ? child(node, "values") : node;
+}
+
+export function axisLabels(file, axis, start, count) {
+  const ds = indexDataset(file, axis);
+  if (!ds) return null;
+  const n = normAttr(ds.shape)[0];
+  const s = Math.max(0, Math.min(start | 0, n));
+  const e = Math.max(s, Math.min(s + (count | 0), n));
+  return { labels: Array.from(ds.slice([[s, e]]), String), start: s, n };
+}
+
+// ---- column reader ------------------------------------------------
+
+export function readColumn(file, axis, key) {
+  const grp = file.get(axis);
+  if (!grp) throw new Error(`${axis} 없음`);
+  const indexName = attr(grp, "_index") || "_index";
+  const isIndex = key === "__index__" || key === indexName;
+  const name = isIndex ? indexName : key;
+  const node = child(grp, name);
+  if (!node) throw new Error(`${axis}/${name} 없음`);
+
+  const labelHead = (n) => {
+    const ds = indexDataset(file, axis);
+    try {
+      return Array.from(ds.slice([[0, Math.min(n, normAttr(ds.shape)[0])]]), String);
+    } catch (_) {
+      return null;
+    }
+  };
+
+  let result = { axis, key: name, isIndex };
+
+  if (isGroup(node)) {
+    const enc = encodingOf(node);
+    if (enc === "categorical") {
+      const cats = toArr(child(node, "categories").value).map(String);
+      const { data: codes, n, approx } = readVec(child(node, "codes"));
+      const labels = codes.map((c) => (c < 0 || c >= cats.length ? "(결측)" : cats[c]));
+      const vc = valueCounts(labels, 100);
+      result = { ...result, kind: "categorical", n, approx, ordered: !!attr(node, "ordered"), nCategories: cats.length, ...vc };
+      result.preview = buildPreview(labelHead(PREVIEW), labels);
+      return result;
+    }
+    if (enc === "nullable-integer" || enc === "nullable-boolean") {
+      const { data: vals, n, approx } = readVec(child(node, "values"));
+      const mask = readVec(child(node, "mask")).data;
+      let nMissing = 0;
+      const clean = vals.map((v, i) => (mask[i] ? (nMissing++, NaN) : v));
+      if (enc === "nullable-boolean") {
+        const labels = clean.map((v) => (Number.isNaN(v) ? "(결측)" : v ? "참" : "거짓"));
+        result = { ...result, kind: "bool", n, approx, nMissing, ...valueCounts(labels, 10) };
+      } else {
+        result = { ...result, kind: "numeric", n, approx, nMissing, stats: numericStats(clean), histogram: histogram(clean) };
+      }
+      result.preview = buildPreview(labelHead(PREVIEW), clean);
+      return result;
+    }
+    if (enc === "nullable-string-array" || enc === "string-array") {
+      const { data: vals, n, approx } = readVec(child(node, "values"));
+      const maskDs = child(node, "mask");
+      let nMissing = 0;
+      const clean = vals.map((v, i) => v);
+      if (maskDs) {
+        const mask = readVec(maskDs).data;
+        for (let i = 0; i < clean.length; i++) if (mask[i]) (clean[i] = "(결측)"), nMissing++;
+      }
+      result = { ...result, kind: "string", n, approx, nMissing, ...valueCounts(clean.map(String), 50) };
+      result.preview = buildPreview(labelHead(PREVIEW), clean);
+      return result;
+    }
+    throw new Error(`지원하지 않는 컬럼 인코딩: ${enc}`);
+  }
+
+  // plain dataset column
+  const ti = typeInfo(node.metadata);
+  const { data: vals, n, approx } = readVec(node);
+  if (ti.cls === "numeric") {
+    result = { ...result, kind: "numeric", n, approx, nMissing: 0, stats: numericStats(vals), histogram: histogram(vals) };
+  } else if (ti.cls === "bool") {
+    const labels = vals.map((v) => (v ? "참" : "거짓"));
+    result = { ...result, kind: "bool", n, approx, nMissing: 0, ...valueCounts(labels, 10) };
+  } else {
+    const s = vals.map(String);
+    result = { ...result, kind: "string", n, approx, nMissing: 0, ...valueCounts(s, 50) };
+  }
+  result.preview = buildPreview(labelHead(PREVIEW), vals);
+  return result;
+}
+
+function buildPreview(labels, values) {
+  const out = [];
+  const k = Math.min(PREVIEW, values.length);
+  for (let i = 0; i < k; i++) {
+    let v = values[i];
+    if (typeof v === "number" && Number.isNaN(v)) v = "(결측)";
+    out.push({ i, label: labels ? labels[i] : String(i), value: v });
+  }
+  return out;
+}
+
+// ---- matrix slice ------------------------------------------------
+
+export function readMatrixSlice(file, path, r0, rn, c0, cn) {
+  const node = file.get(path);
+  if (!node) throw new Error(`${path} 없음`);
+  const enc = isGroup(node) ? encodingOf(node) : null;
+
+  if (enc === "csr_matrix" || enc === "csc_matrix") {
+    const shape = normAttr(attr(node, "shape"));
+    const [R, C] = shape;
+    r0 = clamp(r0, 0, R);
+    c0 = clamp(c0, 0, C);
+    rn = clamp(rn, 0, R - r0);
+    cn = clamp(cn, 0, C - c0);
+    const indptr = child(node, "indptr");
+    const dataDs = child(node, "data");
+    const idxDs = child(node, "indices");
+    const rows = Array.from({ length: rn }, () => new Array(cn).fill(0));
+
+    if (enc === "csr_matrix") {
+      const ip = toArr(indptr.slice([[r0, r0 + rn + 1]]));
+      for (let k = 0; k < rn; k++) {
+        const s = ip[k],
+          e = ip[k + 1];
+        if (e <= s) continue;
+        const cols = toArr(idxDs.slice([[s, e]]));
+        const vals = toArr(dataDs.slice([[s, e]]));
+        for (let j = 0; j < cols.length; j++) {
+          const col = cols[j];
+          if (col >= c0 && col < c0 + cn) rows[k][col - c0] = vals[j];
+        }
+      }
+    } else {
+      const ip = toArr(indptr.slice([[c0, c0 + cn + 1]]));
+      for (let k = 0; k < cn; k++) {
+        const s = ip[k],
+          e = ip[k + 1];
+        if (e <= s) continue;
+        const rws = toArr(idxDs.slice([[s, e]]));
+        const vals = toArr(dataDs.slice([[s, e]]));
+        for (let j = 0; j < rws.length; j++) {
+          const row = rws[j];
+          if (row >= r0 && row < r0 + rn) rows[row - r0][k] = vals[j];
+        }
+      }
+    }
+    return { format: enc === "csr_matrix" ? "csr" : "csc", shape, rowRange: [r0, r0 + rn], colRange: [c0, c0 + cn], rows };
+  }
+
+  // dense dataset
+  const shape = normAttr(node.shape);
+  const R = shape[0],
+    C = shape.length > 1 ? shape[1] : 1;
+  r0 = clamp(r0, 0, R);
+  c0 = clamp(c0, 0, C);
+  rn = clamp(rn, 0, R - r0);
+  cn = clamp(cn, 0, C - c0);
+  const flat = shape.length > 1 ? node.slice([[r0, r0 + rn], [c0, c0 + cn]]) : node.slice([[r0, r0 + rn]]);
+  const arr = toArr(flat);
+  const rows = [];
+  for (let k = 0; k < rn; k++) rows.push(arr.slice(k * cn, k * cn + cn));
+  return { format: "dense", shape, rowRange: [r0, r0 + rn], colRange: [c0, c0 + cn], rows };
+}
+
+function clamp(v, lo, hi) {
+  v = v | 0;
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+// engine wrapper: slice + attach row/col labels
+export function matrixWithLabels(file, p) {
+  const slice = readMatrixSlice(file, p.path, p.r0 ?? 0, p.rn ?? 20, p.c0 ?? 0, p.cn ?? 20);
+  const rowLabels = p.rowAxis ? (axisLabels(file, p.rowAxis, slice.rowRange[0], slice.rows.length) || {}).labels : null;
+  const colLabels = p.colAxis ? (axisLabels(file, p.colAxis, slice.colRange[0], slice.colRange[1] - slice.colRange[0]) || {}).labels : null;
+  return { ...slice, rowLabels, colLabels };
+}
+
+// ---- uns node --------------------------------------------------
+
+export function readUnsNode(file, path) {
+  const node = file.get(path);
+  if (!node) throw new Error(`${path} 없음`);
+  if (isGroup(node)) return { kind: "dict", keys: node.keys() };
+  const shape = normAttr(node.shape);
+  const dtype = typeInfo(node.metadata).dtype;
+  if (Array.isArray(shape) && shape.length === 0) {
+    let value;
+    try {
+      value = node.value;
+      if (typeof value === "bigint") value = Number(value);
+    } catch (e) {
+      value = `<${e.message}>`;
+    }
+    return { kind: "scalar", dtype, value };
+  }
+  const total = shape.reduce((a, b) => a * b, 1);
+  const CAP = 5000;
+  let data,
+    approx = false;
+  if (total <= CAP) data = toArr(node.value);
+  else {
+    data = toArr(node.slice([[0, CAP]]));
+    approx = true;
+  }
+  const numeric = typeInfo(node.metadata).cls === "numeric";
+  return {
+    kind: "array",
+    shape,
+    dtype,
+    approx,
+    data: data.slice(0, CAP).map(String),
+    stats: numeric ? numericStats(data) : null,
+    histogram: numeric ? histogram(data) : null,
+  };
+}

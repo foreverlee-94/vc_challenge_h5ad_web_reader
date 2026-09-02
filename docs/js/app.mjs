@@ -1,10 +1,16 @@
 // UI controller (main thread).
-// Phase 1: pick a file, show a plain-language semantic overview + the raw
-// HDF5 tree (collapsed, "advanced"). Dropdown-driven per-item views: Phase 3.
+// - Plain-language overview of the file (Phase 1).
+// - "항목 살펴보기": cascading dropdowns (component -> key -> view) that read
+//   the actual values and render tables / bar charts / histograms / matrix
+//   slices (Phase 2+3).
+// - Raw HDF5 tree under "advanced".
 //
 // Reading engine: a module Web Worker (h5wasm + WORKERFS, lazy IO). If the
 // worker can't boot (older browsers, blocked module workers), we transparently
-// fall back to a main-thread engine that loads the file into memory.
+// fall back to a main-thread engine that loads the file into memory. Both
+// expose the same eng.call(type, payload, onProgress).
+
+import { barChartSVG, histogramSVG } from "./charts.mjs";
 
 let enginePromise = null;
 
@@ -48,11 +54,11 @@ function makeWorkerEngine() {
         clearTimeout(bootTimer);
         resolve({
           mode: "worker",
-          open(file, onProgress) {
+          call(type, payload, onProgress) {
             const id = ++seq;
             return new Promise((res, rej) => {
               pending.set(id, { res, rej, onProgress });
-              worker.postMessage({ id, type: "open", payload: { file } });
+              worker.postMessage({ id, type, payload });
             });
           },
         });
@@ -76,8 +82,8 @@ async function getEngine() {
       const forceMain = new URLSearchParams(location.search).get("engine") === "main";
       const w = forceMain ? null : await makeWorkerEngine();
       if (w) return w;
-      const { openFileMain } = await import("./mainengine.mjs");
-      return { mode: "main", open: (file, onProgress) => openFileMain(file, onProgress) };
+      const { mainEngine } = await import("./mainengine.mjs");
+      return mainEngine;
     })();
   }
   return enginePromise;
@@ -140,7 +146,7 @@ async function handleFile(file) {
   const t0 = performance.now();
   try {
     const eng = await getEngine();
-    const info = await eng.open(file, (msg) => setStatus(`${file.name} — ${msg}`, "info"));
+    const info = await eng.call("open", { file }, (msg) => setStatus(`${file.name} — ${msg}`, "info"));
     const ms = Math.round(performance.now() - t0);
     render(info, ms);
     setStatus(`열림: ${file.name} · ${ms} ms${eng.mode === "main" ? " · 메인 스레드 모드(파일 전체 메모리 로드)" : ""}`, "ok");
@@ -151,9 +157,11 @@ async function handleFile(file) {
 
 function render(info, ms) {
   const { file, summary, tree } = info;
+  currentSummary = summary;
   reportBox.innerHTML = "";
   reportBox.append(
     overviewCard(file, summary, ms),
+    inspectSection(summary),
     dataframeSection("세포 정보 (obs)", summary.obs, "세포", "유전자 이름 외 추가 컬럼이 없습니다."),
     dataframeSection("유전자 정보 (var)", summary.var, "유전자", "추가 컬럼이 없습니다 (유전자 이름만)."),
     mappingSection(summary),
@@ -163,6 +171,8 @@ function render(info, ms) {
   reportBox.append(advancedTree(tree));
   reportBox.hidden = false;
 }
+
+let currentSummary = null;
 
 // ---- overview ------------------------------------------------------
 
@@ -211,6 +221,320 @@ function mappingCounts(s) {
 function unsCount(uns) {
   const keys = Object.keys(uns || {}).filter((k) => k !== "__truncated__");
   return keys.length ? `${keys.length}개 항목` : "없음";
+}
+
+// ---- inspect panel: component -> key -> view -------------------
+
+let inspectKeysCache = [];
+
+function inspectComponents(s) {
+  const out = [];
+  if (s.obs && (s.obs.columns.length || s.obs.nRows)) out.push({ id: "obs", label: "세포 정보 (obs)" });
+  if (s.var && (s.var.columns.length || s.var.nRows)) out.push({ id: "var", label: "유전자 정보 (var)" });
+  if (s.X) out.push({ id: "X", label: "발현 행렬 X" });
+  for (const m of ["layers", "obsm", "varm", "obsp", "varp"]) if (Object.keys(s[m] || {}).length) out.push({ id: m, label: m });
+  if (Object.keys(s.uns || {}).filter((k) => k !== "__truncated__").length) out.push({ id: "uns", label: "비정형 데이터 (uns)" });
+  if (s.raw && s.raw.X) out.push({ id: "raw.X", label: "raw.X" });
+  return out;
+}
+
+function unsLeaves(node, prefix = "") {
+  const out = [];
+  for (const k of Object.keys(node || {})) {
+    if (k === "__truncated__") continue;
+    const v = node[k];
+    const path = prefix ? `${prefix}/${k}` : k;
+    if (v.kind === "dict") {
+      if (v.children) out.push(...unsLeaves(v.children, path));
+      else out.push({ path, kind: "dict" });
+    } else out.push({ path, kind: v.kind });
+  }
+  return out;
+}
+
+function inspectKeysFor(s, comp) {
+  if (comp === "obs" || comp === "var") {
+    const df = s[comp];
+    const list = [{ value: "__index__", label: comp === "obs" ? "_index (세포 이름)" : "_index (유전자 이름)", kind: "string" }];
+    for (const c of df.columns) list.push({ value: c.name, label: c.name, kind: c.kind === "group" ? "string" : c.kind });
+    return list;
+  }
+  if (comp === "X") return [{ value: "X", label: "(전체 행렬)", kind: "matrix" }];
+  if (comp === "raw.X") return [{ value: "raw/X", label: "(전체 행렬)", kind: "matrix" }];
+  if (comp === "uns") return unsLeaves(s.uns).map((p) => ({ value: p.path, label: p.path, kind: "uns-" + p.kind }));
+  const map = s[comp] || {};
+  return Object.entries(map).map(([k, v]) => {
+    let kind = "matrix";
+    if (v.format === "dense") kind = Array.isArray(v.shape) && v.shape.length === 1 ? "vector" : "matrix";
+    else if (v.format === "group") kind = "group";
+    return { value: k, label: k, kind };
+  });
+}
+
+function inspectViewsFor(kind) {
+  switch (kind) {
+    case "categorical":
+    case "bool":
+      return [["counts", "빈도 표"], ["bar", "막대그래프"], ["preview", "값 미리보기"]];
+    case "numeric":
+    case "vector":
+    case "uns-array":
+      return [["stats", "요약통계"], ["hist", "히스토그램"], ["preview", "값 미리보기"]];
+    case "string":
+      return [["counts", "고유값·빈도"], ["preview", "값 미리보기"]];
+    case "matrix":
+      return [["slice", "구간 미리보기"], ["minfo", "형태·밀도"]];
+    case "uns-scalar":
+      return [["value", "값"]];
+    case "uns-dict":
+    case "group":
+      return [["ginfo", "내용 목록"]];
+    default:
+      return [["preview", "미리보기"]];
+  }
+}
+
+function matrixAxes(comp) {
+  if (comp === "X" || comp === "layers") return { rowAxis: "obs", colAxis: "var" };
+  if (comp === "obsm" || comp === "raw.X") return { rowAxis: "obs", colAxis: null };
+  if (comp === "varm") return { rowAxis: "var", colAxis: null };
+  if (comp === "obsp") return { rowAxis: "obs", colAxis: "obs" };
+  if (comp === "varp") return { rowAxis: "var", colAxis: "var" };
+  return { rowAxis: null, colAxis: null };
+}
+
+function optionEls(list) {
+  return list.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
+}
+
+function inspectSection(s) {
+  const sec = document.createElement("section");
+  sec.className = "card";
+  const comps = inspectComponents(s);
+  if (!comps.length) {
+    sec.innerHTML = `<h2>항목 살펴보기</h2><p class="muted">살펴볼 항목이 없습니다.</p>`;
+    return sec;
+  }
+  sec.innerHTML = `
+    <h2>항목 살펴보기</h2>
+    <p class="muted">구성요소 → 항목 → 보기 방식을 골라 실제 값을 확인하세요.</p>
+    <div class="pickers">
+      <label>구성요소<select id="pk-comp">${optionEls(comps.map((c) => ({ value: c.id, label: c.label })))}</select></label>
+      <label>항목<select id="pk-key"></select></label>
+      <label>보기<select id="pk-view"></select></label>
+    </div>
+    <div id="pk-opts"></div>
+    <div><button id="pk-run" type="button">확인</button></div>
+    <div id="pk-result"></div>`;
+
+  const compSel = sec.querySelector("#pk-comp");
+  const keySel = sec.querySelector("#pk-key");
+  const viewSel = sec.querySelector("#pk-view");
+  const optsBox = sec.querySelector("#pk-opts");
+  const resultBox = sec.querySelector("#pk-result");
+
+  const currentKey = () => inspectKeysCache.find((k) => k.value === keySel.value);
+
+  function refillKeys() {
+    inspectKeysCache = inspectKeysFor(s, compSel.value);
+    keySel.innerHTML = optionEls(inspectKeysCache);
+    refillViews();
+  }
+  function refillViews() {
+    const k = currentKey();
+    const views = inspectViewsFor(k ? k.kind : "");
+    viewSel.innerHTML = views.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("");
+    refillOpts();
+  }
+  function refillOpts() {
+    const k = currentKey();
+    if (k && k.kind === "matrix" && viewSel.value === "slice") {
+      const entry = matrixEntry(s, compSel.value, k.value);
+      const shp = entry && entry.shape ? entry.shape : [null, null];
+      optsBox.innerHTML = `
+        <label>행 시작<input id="pk-r0" type="number" min="0" value="0"></label>
+        <label>행 수<input id="pk-rn" type="number" min="1" max="100" value="20"></label>
+        <label>열 시작<input id="pk-c0" type="number" min="0" value="0"></label>
+        <label>열 수<input id="pk-cn" type="number" min="1" max="60" value="20"></label>
+        <span class="muted" style="align-self:end">전체 ${num(shp[0])} × ${num(shp[1])}</span>`;
+    } else {
+      optsBox.innerHTML = "";
+    }
+  }
+
+  function readSliceInputs() {
+    const g = (id, d) => {
+      const n = parseInt((sec.querySelector(id) || {}).value, 10);
+      return Number.isFinite(n) ? n : d;
+    };
+    return {
+      r0: Math.max(0, g("#pk-r0", 0)),
+      rn: Math.min(100, Math.max(1, g("#pk-rn", 20))),
+      c0: Math.max(0, g("#pk-c0", 0)),
+      cn: Math.min(60, Math.max(1, g("#pk-cn", 20))),
+    };
+  }
+
+  async function run() {
+    const comp = compSel.value;
+    const k = currentKey();
+    const view = viewSel.value;
+    if (!comp || !k || !view) return;
+    resultBox.innerHTML = `<p class="muted">불러오는 중…</p>`;
+    try {
+      const eng = await getEngine();
+      if (comp === "obs" || comp === "var") {
+        renderColumnView(resultBox, view, await eng.call("column", { axis: comp, key: k.value }));
+      } else if (comp === "uns") {
+        renderUnsView(resultBox, view, await eng.call("unsNode", { path: "uns/" + k.value }), k.value);
+      } else if (k.kind === "vector" || k.kind === "group") {
+        renderUnsView(resultBox, view, await eng.call("unsNode", { path: `${comp}/${k.value}` }), k.value);
+      } else if (view === "minfo") {
+        renderMatrixInfo(resultBox, matrixEntry(s, comp, k.value), k.value);
+      } else {
+        const path = comp === "X" ? "X" : comp === "raw.X" ? "raw/X" : `${comp}/${k.value}`;
+        const data = await eng.call("matrix", { path, ...readSliceInputs(), ...matrixAxes(comp) });
+        renderMatrixSlice(resultBox, data);
+      }
+    } catch (e) {
+      resultBox.innerHTML = `<p class="err">읽기 실패: ${esc(e && e.message ? e.message : e)}</p>`;
+    }
+  }
+
+  compSel.addEventListener("change", () => {
+    refillKeys();
+    run();
+  });
+  keySel.addEventListener("change", () => {
+    refillViews();
+    run();
+  });
+  viewSel.addEventListener("change", () => {
+    refillOpts();
+    run();
+  });
+  sec.querySelector("#pk-run").addEventListener("click", run);
+
+  refillKeys();
+  return sec;
+}
+
+function matrixEntry(s, comp, key) {
+  if (comp === "X") return s.X;
+  if (comp === "raw.X") return s.raw && s.raw.X;
+  return (s[comp] || {})[key];
+}
+
+// ---- inspect result renderers --------------------------------
+
+function fmtCell(v) {
+  if (v === 0) return "0";
+  if (typeof v !== "number") return esc(v);
+  if (Number.isInteger(v)) return String(v);
+  const a = Math.abs(v);
+  if (a < 1e-3 || a >= 1e5) return v.toExponential(2);
+  return String(Number(v.toFixed(4)));
+}
+
+function freqTable(items, more, total) {
+  const rows = items
+    .map(
+      (r) =>
+        `<tr><td>${esc(r.value)}</td><td class="n">${num(r.count)}</td><td class="n">${total ? ((r.count / total) * 100).toFixed(1) + "%" : "—"}</td></tr>`,
+    )
+    .join("");
+  return `<table class="freq"><thead><tr><th>값</th><th class="n">개수</th><th class="n">비율</th></tr></thead><tbody>${rows}</tbody></table>${
+    more ? `<p class="muted">… 그 외 ${num(more)}개</p>` : ""
+  }`;
+}
+
+function renderColumnView(box, view, d) {
+  const head = `<p class="vhead"><b>${esc(d.key)}</b> — ${esc(kindKo(d.kind))} · ${num(d.n)}개${
+    d.approx ? " <span class='muted'>(표본 기준 근사)</span>" : ""
+  }${d.nMissing ? ` · 결측 ${num(d.nMissing)}` : ""}${d.nUnique != null ? ` · 고유값 ${num(d.nUnique)}` : ""}</p>`;
+  let body = "";
+  if (view === "counts") body = freqTable(d.items || [], d.more, d.total || d.n);
+  else if (view === "bar") body = barChartSVG(d.items || []);
+  else if (view === "stats") body = statsTable(d.stats);
+  else if (view === "hist") body = d.histogram ? histogramSVG(d.histogram) + (d.histogram.single != null ? `<p class="muted">모든 값이 ${fmtCell(d.histogram.single)} 입니다.</p>` : "") : `<p class="muted">히스토그램을 만들 수 없습니다.</p>`;
+  else if (view === "preview") body = previewTable(d.preview || []);
+  box.innerHTML = head + body;
+}
+
+function statsTable(st) {
+  if (!st || !st.n) return `<p class="muted">수치 값이 없습니다.</p>`;
+  const rows = [
+    ["개수", num(st.n)],
+    ["0의 개수", num(st.nZero)],
+    ["최소", fmtCell(st.min)],
+    ["25%", fmtCell(st.q1)],
+    ["중앙값", fmtCell(st.median)],
+    ["75%", fmtCell(st.q3)],
+    ["최대", fmtCell(st.max)],
+    ["평균", fmtCell(st.mean)],
+    ["표준편차", fmtCell(st.std)],
+  ];
+  return `<table class="kv">${rows.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join("")}</table>`;
+}
+
+function previewTable(rows) {
+  if (!rows.length) return `<p class="muted">표시할 값이 없습니다.</p>`;
+  const body = rows.map((r) => `<tr><td class="mono">${esc(r.label)}</td><td class="n">${fmtCell(r.value)}</td></tr>`).join("");
+  return `<div class="tablescroll"><table class="freq"><thead><tr><th>행</th><th class="n">값</th></tr></thead><tbody>${body}</tbody></table></div><p class="muted">앞 ${rows.length}개</p>`;
+}
+
+function renderUnsView(box, view, d, label) {
+  if (d.kind === "scalar") {
+    box.innerHTML = `<p class="vhead"><b>${esc(label)}</b> = ${esc(d.value)} <span class="muted">(${esc(d.dtype)})</span></p>`;
+    return;
+  }
+  if (d.kind === "dict") {
+    box.innerHTML = `<p class="vhead"><b>${esc(label)}</b> — 그룹</p><ul class="items">${(d.keys || []).map((k) => `<li class="mono">${esc(k)}</li>`).join("")}</ul>`;
+    return;
+  }
+  // array / vector
+  const head = `<p class="vhead"><b>${esc(label)}</b> — 배열 [${(d.shape || []).join(" × ")}] · ${esc(d.dtype)}${d.approx ? " <span class='muted'>(앞부분만)</span>" : ""}</p>`;
+  let body = "";
+  if (view === "stats") body = statsTable(d.stats);
+  else if (view === "hist") body = d.histogram && d.histogram.counts && d.histogram.counts.length ? histogramSVG(d.histogram) : `<p class="muted">히스토그램을 만들 수 없습니다.</p>`;
+  else body = `<div class="tablescroll"><table class="freq"><tbody>${(d.data || []).slice(0, 200).map((v, i) => `<tr><td class="mono">${i}</td><td class="n">${esc(v)}</td></tr>`).join("")}</tbody></table></div>`;
+  box.innerHTML = head + body;
+}
+
+function renderMatrixInfo(box, entry, label) {
+  if (!entry) {
+    box.innerHTML = `<p class="muted">정보가 없습니다.</p>`;
+    return;
+  }
+  const rows = [
+    ["형태", Array.isArray(entry.shape) ? entry.shape.map(num).join(" × ") : "—"],
+    ["형식", FORMAT_KO[entry.format] || entry.format || "—"],
+    ["자료형", entry.dtype || "—"],
+    ["0이 아닌 값(nnz)", entry.nnz != null ? num(entry.nnz) : "—"],
+    ["밀도", entry.density != null ? pct(entry.density) : "—"],
+  ];
+  box.innerHTML = `<p class="vhead"><b>${esc(label)}</b></p><table class="kv">${rows
+    .map(([k, v]) => `<tr><th>${k}</th><td>${esc(v)}</td></tr>`)
+    .join("")}</table>`;
+}
+
+function renderMatrixSlice(box, d) {
+  const [r0, r1] = d.rowRange;
+  const [c0, c1] = d.colRange;
+  const colLabels = d.colLabels || Array.from({ length: c1 - c0 }, (_, i) => String(c0 + i));
+  const rowLabels = d.rowLabels || Array.from({ length: r1 - r0 }, (_, i) => String(r0 + i));
+  const thead = `<thead><tr><th></th>${colLabels.map((l) => `<th>${esc(l)}</th>`).join("")}</tr></thead>`;
+  const tbody = d.rows
+    .map(
+      (row, ri) =>
+        `<tr><th>${esc(rowLabels[ri] ?? r0 + ri)}</th>${row
+          .map((v) => `<td class="${v === 0 ? "z" : ""}">${fmtCell(v)}</td>`)
+          .join("")}</tr>`,
+    )
+    .join("");
+  box.innerHTML = `<p class="vhead">행 ${num(r0)}–${num(r1 - 1)} × 열 ${num(c0)}–${num(c1 - 1)} · 전체 ${num(d.shape[0])} × ${num(
+    d.shape[1],
+  )} · ${esc(FORMAT_KO[d.format] || d.format)}</p><div class="tablescroll"><table class="matrix">${thead}<tbody>${tbody}</tbody></table></div>`;
 }
 
 // ---- dataframe (obs / var) --------------------------------------

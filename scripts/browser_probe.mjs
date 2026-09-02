@@ -109,7 +109,13 @@ const dump = async (sel) => {
 };
 console.log("\n===== #log =====\n" + (await dump("#log")));
 console.log("\n===== #status =====\n" + (await dump("#status")));
-console.log("\n===== #report =====\n" + (await dump("#report")));
+
+if (process.env.EVAL) {
+  const r = await cmd("Runtime.evaluate", { expression: process.env.EVAL, returnByValue: true, awaitPromise: true });
+  console.log("\n===== EVAL =====\n" + JSON.stringify(r?.result?.value ?? r?.exceptionDetails ?? "(nothing)", null, 2));
+} else {
+  console.log("\n===== #report =====\n" + (await dump("#report")));
+}
 
 ws.close();
 chrome.kill();

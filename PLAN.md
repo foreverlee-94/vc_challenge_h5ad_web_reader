@@ -89,10 +89,16 @@ scripts/          (개발·검증용, Pages 미포함)
 - **Phase 1 — 파서 (완료)**: `anndata.mjs`로 구조 → 요약 객체, 일상어 개요 UI.
   `expected_summary.py`와 대조(context_A/B/C + fixture). 엔진 폴백 + 오류 표면화 추가,
   헤드리스 Chrome 실시간 CDP로 워커/폴백/225MB 파일 검증.
-- **Phase 2 — 읽기 연산**: `readColumn`(코드→라벨), `readMatrixSlice`(CSR), `readUnsNode`, 통계.
-- **Phase 3 — 드롭다운 UI**: 연쇄 셀렉터 + 보기별 렌더 + 개요 패널 + 차트.
-- **Phase 4 — 마무리**: 로딩/에러 표시, 대용량·Safari 경고, README, 첫 Pages 배포 확인.
-- **후속**: 현재 보기 CSV 내보내기, Playwright 스모크 테스트, IDBFS 캐시.
+- **Phase 2+3 — 읽기 연산 + 드롭다운 UI (완료)**: `reads.mjs`(`readColumn` 코드→라벨,
+  `readMatrixSlice` CSR/CSC/dense, `matrixWithLabels`, `readUnsNode`), `stats.mjs`
+  (수치 요약·히스토그램·빈도), `charts.mjs`(의존성 없는 SVG 막대·히스토그램).
+  "항목 살펴보기" 패널: 구성요소→항목→보기 연쇄 드롭다운, 빈도표/막대/히스토그램/
+  요약통계/값 미리보기/행렬 구간 미리보기(행·열 범위 입력). 두 엔진(worker/main)에
+  `eng.call(type,payload)` 공통. `scripts/reads_h5wasm.mjs`로 fixture + context_A 검증,
+  헤드리스 Chrome로 드롭다운 조작까지 확인.
+- **Phase 4 — 마무리**: 대용량·Safari 경고, 유전자명/세포명으로 행·열 선택,
+  현재 보기 CSV 내보내기, README 갱신.
+- **후속**: Playwright 스모크 테스트, IDBFS 캐시.
 
 ## 로컬 미리보기
 
