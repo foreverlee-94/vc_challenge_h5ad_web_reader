@@ -1340,19 +1340,59 @@ function renderNode(node) {
 
 // ---- events -------------------------------------------------
 
-const pickFile = () => {
+// Prefer the File System Access API so the native dialog's confirm button reads
+// "열기" / "폴더 선택" rather than "업로드"; fall back to a classic <input> on
+// browsers without it (Firefox, Safari).
+const H5_ACCEPT = { description: "AnnData / HDF5", accept: { "application/octet-stream": [".h5ad", ".h5", ".hdf5"] } };
+
+async function pickFile() {
+  if (window.showOpenFilePicker) {
+    try {
+      const [handle] = await window.showOpenFilePicker({ multiple: false, types: [H5_ACCEPT], excludeAcceptAllOption: false });
+      handleFile(await handle.getFile());
+      return;
+    } catch (e) {
+      if (e && e.name === "AbortError") return; // cancelled
+      // any other error → fall back to the classic input below
+    }
+  }
   fileInput.value = "";
   fileInput.click();
-};
+}
+
+async function pickFolder() {
+  if (window.showDirectoryPicker) {
+    try {
+      const dir = await window.showDirectoryPicker();
+      const files = [];
+      const walk = async (handle, prefix) => {
+        for await (const entry of handle.values()) {
+          if (entry.kind === "file") {
+            const f = await entry.getFile();
+            try {
+              Object.defineProperty(f, "relPath", { value: prefix + entry.name });
+            } catch (_) {}
+            files.push(f);
+          } else if (entry.kind === "directory") {
+            await walk(entry, prefix + entry.name + "/");
+          }
+        }
+      };
+      await walk(dir, dir.name + "/");
+      scanFolder(files);
+      return;
+    } catch (e) {
+      if (e && e.name === "AbortError") return;
+    }
+  }
+  folderInput.value = "";
+  folderInput.click();
+}
 
 fileInput.addEventListener("change", () => handleFile(fileInput.files[0]));
 openBtn.addEventListener("click", pickFile);
 el("filebar-change").addEventListener("click", pickFile);
-
-scanBtn.addEventListener("click", () => {
-  folderInput.value = "";
-  folderInput.click();
-});
+scanBtn.addEventListener("click", pickFolder);
 folderInput.addEventListener("change", () => {
   const files = Array.from(folderInput.files || []);
   if (files.length) scanFolder(files);
