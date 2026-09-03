@@ -81,7 +81,14 @@ export function histogramSVG(hist, { width = 620, height = 250, xLabel = "값", 
       return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(0.5, bw - 1).toFixed(1)}" height="${bh.toFixed(1)}" class="bar"/>`;
     })
     .join("");
-  const fmt = (v) => (Math.abs(v) >= 1000 || (v !== 0 && Math.abs(v) < 0.01) ? v.toExponential(2) : Number(v.toFixed(3)));
+  // plain integer / decimal (no exponential), grouped thousands
+  const fmt = (v) => {
+    if (!Number.isFinite(v)) return String(v);
+    if (v === 0) return "0";
+    const a = Math.abs(v);
+    const digits = a >= 100 ? 0 : a >= 1 ? 2 : a >= 0.01 ? 4 : 6;
+    return v.toLocaleString("en-US", { maximumFractionDigits: digits });
+  };
   return `<svg viewBox="0 0 ${width} ${height}" class="chart" preserveAspectRatio="xMinYMin meet" role="img" aria-label="히스토그램 (x: ${escXml(xLabel)}, y: ${escXml(yLabel)})">
     ${bars}
     <line x1="${padL}" y1="${baseY}" x2="${width - padR}" y2="${baseY}" class="axis"/>
