@@ -350,5 +350,35 @@ export function quickShape(file) {
     }
   } catch (_) {}
 
-  return { nObs, nVars, nVarUnique, xFormat, encoding: attr(file, "encoding-type") || null };
+  // protein-coding subset (var.feature_type == "protein_coding"), if present
+  let nProteinCoding = null;
+  try {
+    if (has("var")) {
+      const ft = child(file.get("var"), "feature_type");
+      if (ft && isGroup(ft) && encodingOf(ft) === "categorical") {
+        const cats = Array.from(child(ft, "categories").value, String);
+        const pc = cats.indexOf("protein_coding");
+        if (pc >= 0) {
+          const codes = child(ft, "codes").value;
+          let n = 0;
+          for (let i = 0; i < codes.length; i++) if (codes[i] === pc) n++;
+          nProteinCoding = n;
+        }
+      }
+    }
+  } catch (_) {}
+
+  // obs column carrying a per-cell gene/feature count, if any (name only)
+  let obsGeneCol = null;
+  try {
+    if (has("obs")) {
+      const cols = normAttr(attr(file.get("obs"), "column-order")) || [];
+      obsGeneCol = cols.map(String).find((c) => OBS_GENE_RE.test(c)) || null;
+    }
+  } catch (_) {}
+
+  return { nObs, nVars, nVarUnique, nProteinCoding, obsGeneCol, xFormat, encoding: attr(file, "encoding-type") || null };
 }
+
+export const OBS_GENE_RE =
+  /^(n_?genes?(_by_counts)?|num_?genes?|gene_?counts?|count_?genes?|genes?_?count|n_?features?(_[a-z0-9]+)?|nfeatures?_?[a-z0-9]*|ngenes?|detected_?genes?|genes?_?detected|expressed_?genes?)$/i;

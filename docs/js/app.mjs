@@ -331,6 +331,8 @@ async function scanFolder(files) {
           nVars: genes,
           nVarsRaw: q.nVars,
           dup: q.nVarUnique != null && q.nVars != null ? q.nVars - q.nVarUnique : 0,
+          nPC: q.nProteinCoding ?? null,
+          obsGeneCol: q.obsGeneCol ?? null,
           nObs: q.nObs,
           xFormat: q.xFormat,
         });
@@ -380,19 +382,36 @@ function drawScan() {
     .sort((a, b) => a.dir.localeCompare(b.dir));
 
   const dupFiles = rows.filter((r) => r.dup > 0);
+  const pc = rows.map((r) => r.nPC).filter((v) => v != null);
+  const withObsCol = rows.filter((r) => r.obsGeneCol);
   const stat =
     genes.length === 0
       ? `<p class="muted">유전자 개수를 읽을 수 있는 파일이 없습니다.</p>`
-      : `<p class="muted">유전자 수 = var 인덱스의 <b>서로 다른(unique)</b> 식별자 개수.</p>
+      : `<p class="muted">유전자 수 = <b>var</b> 인덱스의 서로 다른(unique) 식별자 개수.
+         단백질코딩 = <b>var.feature_type == "protein_coding"</b>. obs 유전자수 컬럼 = 세포당 유전자 수를 담은 obs 컬럼(있으면).</p>
         <table class="kv">
           <tr><th>파일 수</th><td>${num(rows.length)}${errs.length ? ` (오류 ${num(errs.length)})` : ""}</td></tr>
-          <tr><th>유전자 수 최소 / 최대</th><td>${num(Math.min(...genes))} / ${num(Math.max(...genes))}</td></tr>
+          <tr><th>유전자 수(var) 최소 / 최대</th><td>${num(Math.min(...genes))} / ${num(Math.max(...genes))}</td></tr>
           <tr><th>중앙값</th><td>${num(median(genes))}</td></tr>
           <tr><th>서로 다른 유전자 수(파일 간)</th><td>${num(new Set(genes).size)}종</td></tr>
+          ${pc.length ? `<tr><th>단백질코딩 유전자 최소 / 최대</th><td>${num(Math.min(...pc))} / ${num(Math.max(...pc))} <span class="muted">(${num(pc.length)}개 파일에서 확인)</span></td></tr>` : ""}
+          <tr><th>obs에 유전자수 컬럼 보유</th><td>${num(withObsCol.length)} / ${num(rows.length)}개</td></tr>
           ${dupFiles.length ? `<tr><th>var 인덱스에 중복이 있는 파일</th><td>${num(dupFiles.length)}개</td></tr>` : ""}
         </table>`;
 
-  const hist = genes.length ? histogramSVG(histogram(genes, Math.min(30, Math.max(6, new Set(genes).size)))) : "";
+  const hist = genes.length
+    ? histogramSVG(histogram(genes, Math.min(30, Math.max(6, new Set(genes).size))), {
+        xLabel: "유전자 수 (var 고유)",
+        yLabel: "파일 수",
+      })
+    : "";
+  const histPC =
+    pc.length > 1
+      ? histogramSVG(histogram(pc, Math.min(30, Math.max(6, new Set(pc).size))), {
+          xLabel: "단백질코딩 유전자 수",
+          yLabel: "파일 수",
+        })
+      : "";
 
   const dirTable =
     byDir.size > 1
@@ -408,6 +427,7 @@ function drawScan() {
   const sorters = {
     path: (a, b) => a.path.localeCompare(b.path),
     nVars: (a, b) => (a.nVars ?? -1) - (b.nVars ?? -1),
+    nPC: (a, b) => (a.nPC ?? -1) - (b.nPC ?? -1),
     nObs: (a, b) => (a.nObs ?? -1) - (b.nObs ?? -1),
     size: (a, b) => a.size - b.size,
   };
@@ -421,6 +441,8 @@ function drawScan() {
         `<tr data-path="${esc(r.path)}">
           <td class="mono">${esc(r.path)}</td>
           <td class="n">${r.error ? '<span class="err">오류</span>' : num(r.nVars) + (r.dup > 0 ? ` <span class="muted">(행 ${num(r.nVarsRaw)}, 중복 ${num(r.dup)})</span>` : "")}</td>
+          <td class="n">${r.error ? "" : r.nPC != null ? num(r.nPC) : "—"}</td>
+          <td class="mono muted">${esc(r.obsGeneCol || "—")}</td>
           <td class="n">${r.error ? "" : num(r.nObs)}</td>
           <td class="n muted">${r.xFormat || ""}</td>
           <td class="n muted">${fmtBytes(r.size)}</td>
@@ -433,6 +455,7 @@ function drawScan() {
       <h2>폴더 스캔 — 유전자 개수 분포</h2>
       ${stat}
       ${hist}
+      ${histPC ? `<h3>단백질코딩 유전자 분포</h3>${histPC}` : ""}
     </section>
     ${dirTable ? `<section class="card">${dirTable}</section>` : ""}
     <section class="card">
@@ -440,7 +463,9 @@ function drawScan() {
       <div class="tablescroll">
         <table class="grid scan-files"><thead><tr>
           <th data-s="path">경로${arrow("path")}</th>
-          <th data-s="nVars" class="n">유전자 수${arrow("nVars")}</th>
+          <th data-s="nVars" class="n">유전자 수(var)${arrow("nVars")}</th>
+          <th data-s="nPC" class="n">단백질코딩${arrow("nPC")}</th>
+          <th>obs 유전자수 컬럼</th>
           <th data-s="nObs" class="n">세포 수${arrow("nObs")}</th>
           <th class="n">X 형식</th>
           <th data-s="size" class="n">크기${arrow("size")}</th>
@@ -1082,9 +1107,13 @@ function renderColumnView(box, view, d) {
     return;
   }
   let body = "";
-  if (view === "bar") body = barChartSVG(d.items || []);
+  if (view === "bar") body = barChartSVG(d.items || [], { xLabel: `${d.key} (값)`, yLabel: "개수 (세포)" });
   else if (view === "stats") body = statsTable(d.stats);
-  else if (view === "hist") body = d.histogram ? histogramSVG(d.histogram) + (d.histogram.single != null ? `<p class="muted">모든 값이 ${fmtCell(d.histogram.single)} 입니다.</p>` : "") : `<p class="muted">히스토그램을 만들 수 없습니다.</p>`;
+  else if (view === "hist")
+    body = d.histogram
+      ? histogramSVG(d.histogram, { xLabel: `${d.key} (값)`, yLabel: "빈도 (세포 수)" }) +
+        (d.histogram.single != null ? `<p class="muted">모든 값이 ${fmtCell(d.histogram.single)} 입니다.</p>` : "")
+      : `<p class="muted">히스토그램을 만들 수 없습니다.</p>`;
   else if (view === "preview") body = previewTable(d.preview || []);
   box.innerHTML = head + body;
 }
@@ -1126,7 +1155,11 @@ function renderUnsView(box, view, d, label) {
   const head = `<p class="vhead"><b>${esc(label)}</b> — 배열 [${(d.shape || []).join(" × ")}] · ${esc(d.dtype)}${d.approx ? " <span class='muted'>(앞부분만)</span>" : ""}</p>`;
   let body = "";
   if (view === "stats") body = statsTable(d.stats);
-  else if (view === "hist") body = d.histogram && d.histogram.counts && d.histogram.counts.length ? histogramSVG(d.histogram) : `<p class="muted">히스토그램을 만들 수 없습니다.</p>`;
+  else if (view === "hist")
+    body =
+      d.histogram && d.histogram.counts && d.histogram.counts.length
+        ? histogramSVG(d.histogram, { xLabel: `${label} (값)`, yLabel: "빈도" })
+        : `<p class="muted">히스토그램을 만들 수 없습니다.</p>`;
   else body = `<div class="tablescroll"><table class="freq"><tbody>${(d.data || []).slice(0, 200).map((v, i) => `<tr><td class="mono">${i}</td><td class="n">${esc(v)}</td></tr>`).join("")}</tbody></table></div>`;
   box.innerHTML = head + body;
 }
