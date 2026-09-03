@@ -317,13 +317,16 @@ export function quickShape(file) {
     }
   }
 
-  const axisLen = (axis) => {
+  const indexDs = (axis) => {
     if (!has(axis)) return null;
     const g = file.get(axis);
     const idxName = attr(g, "_index") || "_index";
     const node = child(g, idxName);
-    const ds = node && isGroup(node) ? child(node, "values") : node;
+    return node && isGroup(node) ? child(node, "values") : node;
+  };
+  const axisLen = (axis) => {
     try {
+      const ds = indexDs(axis);
       return ds ? normAttr(ds.shape)[0] : null;
     } catch (_) {
       return null;
@@ -332,5 +335,20 @@ export function quickShape(file) {
   if (nVars == null) nVars = axisLen("var");
   if (nObs == null) nObs = axisLen("obs");
 
-  return { nObs, nVars, xFormat, encoding: attr(file, "encoding-type") || null };
+  // distinct gene identifiers: a well-formed h5ad has var index == unique, but
+  // concatenated / symbol-indexed files can carry duplicates. The index is a
+  // few hundred KB even for a huge file, so this stays a light read.
+  let nVarUnique = null;
+  try {
+    const ds = indexDs("var");
+    const n = ds ? normAttr(ds.shape)[0] : null;
+    if (n != null && n <= 5000000) {
+      const seen = new Set();
+      const vals = ds.value;
+      for (let i = 0; i < vals.length; i++) seen.add(vals[i]);
+      nVarUnique = seen.size;
+    }
+  } catch (_) {}
+
+  return { nObs, nVars, nVarUnique, xFormat, encoding: attr(file, "encoding-type") || null };
 }

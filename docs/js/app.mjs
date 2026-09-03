@@ -322,7 +322,18 @@ async function scanFolder(files) {
       setStatus(`폴더 스캔 ${i + 1} / ${h5.length} — ${relOf(f)}`, "info");
       try {
         const q = await eng.call("scanFile", { file: f });
-        rows.push({ path: relOf(f), dir: dirOf(relOf(f)), size: f.size, nVars: q.nVars, nObs: q.nObs, xFormat: q.xFormat });
+        // gene count = distinct var identifiers (falls back to the dimension)
+        const genes = q.nVarUnique ?? q.nVars;
+        rows.push({
+          path: relOf(f),
+          dir: dirOf(relOf(f)),
+          size: f.size,
+          nVars: genes,
+          nVarsRaw: q.nVars,
+          dup: q.nVarUnique != null && q.nVars != null ? q.nVars - q.nVarUnique : 0,
+          nObs: q.nObs,
+          xFormat: q.xFormat,
+        });
       } catch (err) {
         rows.push({ path: relOf(f), dir: dirOf(relOf(f)), size: f.size, error: (err && err.message) || String(err) });
       }
@@ -368,14 +379,17 @@ function drawScan() {
     })
     .sort((a, b) => a.dir.localeCompare(b.dir));
 
+  const dupFiles = rows.filter((r) => r.dup > 0);
   const stat =
     genes.length === 0
       ? `<p class="muted">유전자 개수를 읽을 수 있는 파일이 없습니다.</p>`
-      : `<table class="kv">
+      : `<p class="muted">유전자 수 = var 인덱스의 <b>서로 다른(unique)</b> 식별자 개수.</p>
+        <table class="kv">
           <tr><th>파일 수</th><td>${num(rows.length)}${errs.length ? ` (오류 ${num(errs.length)})` : ""}</td></tr>
           <tr><th>유전자 수 최소 / 최대</th><td>${num(Math.min(...genes))} / ${num(Math.max(...genes))}</td></tr>
           <tr><th>중앙값</th><td>${num(median(genes))}</td></tr>
-          <tr><th>서로 다른 유전자 수</th><td>${num(new Set(genes).size)}종</td></tr>
+          <tr><th>서로 다른 유전자 수(파일 간)</th><td>${num(new Set(genes).size)}종</td></tr>
+          ${dupFiles.length ? `<tr><th>var 인덱스에 중복이 있는 파일</th><td>${num(dupFiles.length)}개</td></tr>` : ""}
         </table>`;
 
   const hist = genes.length ? histogramSVG(histogram(genes, Math.min(30, Math.max(6, new Set(genes).size)))) : "";
@@ -406,7 +420,7 @@ function drawScan() {
       (r) =>
         `<tr data-path="${esc(r.path)}">
           <td class="mono">${esc(r.path)}</td>
-          <td class="n">${r.error ? '<span class="err">오류</span>' : num(r.nVars)}</td>
+          <td class="n">${r.error ? '<span class="err">오류</span>' : num(r.nVars) + (r.dup > 0 ? ` <span class="muted">(행 ${num(r.nVarsRaw)}, 중복 ${num(r.dup)})</span>` : "")}</td>
           <td class="n">${r.error ? "" : num(r.nObs)}</td>
           <td class="n muted">${r.xFormat || ""}</td>
           <td class="n muted">${fmtBytes(r.size)}</td>
