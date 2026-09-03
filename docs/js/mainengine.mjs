@@ -4,7 +4,7 @@
 // roughly file-size memory.
 
 import { ready, File as H5File } from "../vendor/h5wasm/hdf5_hl.js";
-import { summarize } from "./anndata.mjs";
+import { summarize, quickShape } from "./anndata.mjs";
 import { buildReport } from "./hdf5tree.mjs";
 import { readColumn, readUnsNode, matrixWithLabels, axisIndex, columnPage } from "./reads.mjs";
 
@@ -43,6 +43,26 @@ function need() {
   return current.h5;
 }
 
+// One file at a time into MEMFS, read shape, free it. Peak RAM ~ one file.
+async function scanFile(file) {
+  if (!Module) {
+    Module = await ready;
+    FS = Module.FS;
+  }
+  const path = `/scan_${++counter}.h5ad`;
+  FS.writeFile(path, new Uint8Array(await file.arrayBuffer()));
+  try {
+    const h5 = new H5File(path, "r");
+    const r = quickShape(h5);
+    h5.close();
+    return r;
+  } finally {
+    try {
+      FS.unlink(path);
+    } catch (_) {}
+  }
+}
+
 export const mainEngine = {
   mode: "main",
   call(type, payload = {}, onProgress = () => {}) {
@@ -59,6 +79,8 @@ export const mainEngine = {
         return Promise.resolve().then(() => readUnsNode(need(), payload.path));
       case "axisIndex":
         return Promise.resolve().then(() => axisIndex(need(), payload.axis));
+      case "scanFile":
+        return scanFile(payload.file);
       default:
         return Promise.reject(new Error(`unknown op: ${type}`));
     }

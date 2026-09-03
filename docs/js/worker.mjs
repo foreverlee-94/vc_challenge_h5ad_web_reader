@@ -6,11 +6,12 @@
 // contract in sync with app.mjs and mainengine.mjs.
 
 import { ready, File as H5File } from "../vendor/h5wasm/hdf5_hl.js";
-import { summarize } from "./anndata.mjs";
+import { summarize, quickShape } from "./anndata.mjs";
 import { buildReport } from "./hdf5tree.mjs";
 import { readColumn, readUnsNode, matrixWithLabels, axisIndex, columnPage } from "./reads.mjs";
 
 const MOUNT = "/work";
+const SCAN_MOUNT = "/scan";
 let Module = null;
 let FS = null;
 let current = null;
@@ -57,6 +58,28 @@ function need() {
   return current.h5;
 }
 
+// Mount one file at a throwaway point, read just its shape, unmount. Does not
+// touch the currently-open file. WORKERFS => only a few KB is actually read.
+async function scanFile(file) {
+  await ensureReady();
+  try {
+    FS.mkdir(SCAN_MOUNT);
+  } catch (_) {}
+  let h5 = null;
+  try {
+    FS.mount(FS.filesystems.WORKERFS, { files: [file] }, SCAN_MOUNT);
+    h5 = new H5File(`${SCAN_MOUNT}/${file.name}`, "r");
+    return quickShape(h5);
+  } finally {
+    try {
+      h5 && h5.close();
+    } catch (_) {}
+    try {
+      FS.unmount(SCAN_MOUNT);
+    } catch (_) {}
+  }
+}
+
 const OPS = {
   open: (p) => open(p.file),
   column: (p) => readColumn(need(), p.axis, p.key),
@@ -64,6 +87,7 @@ const OPS = {
   matrix: (p) => matrixWithLabels(need(), p),
   unsNode: (p) => readUnsNode(need(), p.path),
   axisIndex: (p) => axisIndex(need(), p.axis),
+  scanFile: (p) => scanFile(p.file),
 };
 
 self.onmessage = async (ev) => {

@@ -11,6 +11,7 @@
 // expose the same eng.call(type, payload, onProgress).
 
 import { barChartSVG, histogramSVG } from "./charts.mjs";
+import { histogram } from "./stats.mjs";
 
 let enginePromise = null;
 
@@ -93,7 +94,9 @@ async function getEngine() {
 
 const el = (id) => document.getElementById(id);
 const fileInput = el("file");
+const folderInput = el("folder");
 const openBtn = el("openbtn");
+const scanBtn = el("scanbtn");
 const intro = el("intro");
 const statusBox = el("status");
 const topnav = el("topnav");
@@ -103,6 +106,7 @@ const tabs = {
   overview: el("tab-overview"),
   explore: el("tab-explore"),
   raw: el("tab-raw"),
+  scan: el("tab-scan"),
 };
 const millerEl = el("miller");
 const detailEl = el("detail");
@@ -253,6 +257,211 @@ function buildRawTab(tree) {
   if (rootNode.tagName === "DETAILS") rootNode.open = true;
   card.appendChild(rootNode);
   box.appendChild(card);
+}
+
+// ---- folder scan: gene-count distribution across a folder of .h5ad --------
+
+const H5_RE = /\.(h5ad|h5|hdf5)$/i;
+let scanFileMap = new Map(); // path -> File (for row-click open)
+
+// Recursively collect File objects from FileSystemEntry[] (drag-dropped folder).
+function filesFromEntries(entries) {
+  const out = [];
+  const readDir = (reader) =>
+    new Promise((res, rej) => {
+      const all = [];
+      const pump = () =>
+        reader.readEntries((batch) => {
+          if (!batch.length) return res(all);
+          all.push(...batch);
+          pump();
+        }, rej);
+      pump();
+    });
+  const walk = async (entry, prefix) => {
+    if (entry.isFile) {
+      const file = await new Promise((res, rej) => entry.file(res, rej));
+      try {
+        Object.defineProperty(file, "relPath", { value: prefix + entry.name });
+      } catch (_) {}
+      out.push(file);
+    } else if (entry.isDirectory) {
+      for (const e of await readDir(entry.createReader())) await walk(e, prefix + entry.name + "/");
+    }
+  };
+  return (async () => {
+    for (const e of entries) await walk(e, "");
+    return out;
+  })();
+}
+
+const relOf = (f) => f.relPath || f.webkitRelativePath || f.name;
+const dirOf = (p) => {
+  const i = p.lastIndexOf("/");
+  return i < 0 ? "(루트)" : p.slice(0, i) || "(루트)";
+};
+
+let scanning = false;
+
+async function scanFolder(files) {
+  if (scanning) return;
+  const h5 = files.filter((f) => H5_RE.test(f.name)).sort((a, b) => relOf(a).localeCompare(relOf(b)));
+  if (!h5.length) {
+    setStatus("선택한 폴더에 .h5ad / .h5 / .hdf5 파일이 없습니다.", "warn");
+    return;
+  }
+  scanning = true;
+  scanFileMap = new Map(h5.map((f) => [relOf(f), f]));
+  intro.hidden = true;
+  const t0 = performance.now();
+  const rows = [];
+  try {
+    const eng = await getEngine();
+    for (let i = 0; i < h5.length; i++) {
+      const f = h5[i];
+      setStatus(`폴더 스캔 ${i + 1} / ${h5.length} — ${relOf(f)}`, "info");
+      try {
+        const q = await eng.call("scanFile", { file: f });
+        rows.push({ path: relOf(f), dir: dirOf(relOf(f)), size: f.size, nVars: q.nVars, nObs: q.nObs, xFormat: q.xFormat });
+      } catch (err) {
+        rows.push({ path: relOf(f), dir: dirOf(relOf(f)), size: f.size, error: (err && err.message) || String(err) });
+      }
+    }
+    const ms = Math.round(performance.now() - t0);
+    setStatus(`폴더 스캔 완료 · ${h5.length}개 파일 · ${ms} ms${eng.mode === "main" ? " · 메인 스레드 모드" : ""}`, "ok");
+    topnav.hidden = false;
+    topnav.querySelector('button[data-tab="scan"]').hidden = false;
+    renderScanTab(rows);
+    setTab("scan");
+  } catch (err) {
+    setStatus(`폴더 스캔 실패: ${err && err.message ? err.message : err}`, "error");
+  } finally {
+    scanning = false;
+  }
+}
+
+let scanRowsState = { rows: [], sort: "path", dir: 1, offset: 0 };
+const SCAN_PAGE = 60;
+
+function renderScanTab(rows) {
+  scanRowsState = { rows, sort: "path", dir: 1, offset: 0 };
+  drawScan();
+}
+
+function drawScan() {
+  const { rows } = scanRowsState;
+  const box = tabs.scan;
+  const ok = rows.filter((r) => r.nVars != null);
+  const genes = ok.map((r) => r.nVars);
+  const errs = rows.filter((r) => r.error);
+
+  // per-folder breakdown
+  const byDir = new Map();
+  for (const r of rows) {
+    if (!byDir.has(r.dir)) byDir.set(r.dir, []);
+    byDir.get(r.dir).push(r);
+  }
+  const dirRows = [...byDir.entries()]
+    .map(([d, rs]) => {
+      const g = rs.map((r) => r.nVars).filter((v) => v != null);
+      return { dir: d, n: rs.length, min: g.length ? Math.min(...g) : null, max: g.length ? Math.max(...g) : null, uniq: new Set(g).size };
+    })
+    .sort((a, b) => a.dir.localeCompare(b.dir));
+
+  const stat =
+    genes.length === 0
+      ? `<p class="muted">유전자 개수를 읽을 수 있는 파일이 없습니다.</p>`
+      : `<table class="kv">
+          <tr><th>파일 수</th><td>${num(rows.length)}${errs.length ? ` (오류 ${num(errs.length)})` : ""}</td></tr>
+          <tr><th>유전자 수 최소 / 최대</th><td>${num(Math.min(...genes))} / ${num(Math.max(...genes))}</td></tr>
+          <tr><th>중앙값</th><td>${num(median(genes))}</td></tr>
+          <tr><th>서로 다른 유전자 수</th><td>${num(new Set(genes).size)}종</td></tr>
+        </table>`;
+
+  const hist = genes.length ? histogramSVG(histogram(genes, Math.min(30, Math.max(6, new Set(genes).size)))) : "";
+
+  const dirTable =
+    byDir.size > 1
+      ? `<h3>폴더별</h3><table class="grid"><thead><tr><th>폴더</th><th class="n">파일</th><th class="n">유전자 최소</th><th class="n">최대</th><th class="n">종류</th></tr></thead><tbody>${dirRows
+          .map(
+            (d) =>
+              `<tr><td class="mono">${esc(d.dir)}</td><td class="n">${num(d.n)}</td><td class="n">${num(d.min)}</td><td class="n">${num(d.max)}</td><td class="n">${num(d.uniq)}</td></tr>`,
+          )
+          .join("")}</tbody></table>`
+      : "";
+
+  // sortable + paged file table
+  const sorters = {
+    path: (a, b) => a.path.localeCompare(b.path),
+    nVars: (a, b) => (a.nVars ?? -1) - (b.nVars ?? -1),
+    nObs: (a, b) => (a.nObs ?? -1) - (b.nObs ?? -1),
+    size: (a, b) => a.size - b.size,
+  };
+  const sorted = [...rows].sort((a, b) => sorters[scanRowsState.sort](a, b) * scanRowsState.dir);
+  const off = Math.min(scanRowsState.offset, Math.max(0, Math.floor((rows.length - 1) / SCAN_PAGE) * SCAN_PAGE));
+  const page = sorted.slice(off, off + SCAN_PAGE);
+  const arrow = (k) => (scanRowsState.sort === k ? (scanRowsState.dir === 1 ? " ▲" : " ▼") : "");
+  const frows = page
+    .map(
+      (r) =>
+        `<tr data-path="${esc(r.path)}">
+          <td class="mono">${esc(r.path)}</td>
+          <td class="n">${r.error ? '<span class="err">오류</span>' : num(r.nVars)}</td>
+          <td class="n">${r.error ? "" : num(r.nObs)}</td>
+          <td class="n muted">${r.xFormat || ""}</td>
+          <td class="n muted">${fmtBytes(r.size)}</td>
+        </tr>`,
+    )
+    .join("");
+
+  box.innerHTML = `
+    <section class="card">
+      <h2>폴더 스캔 — 유전자 개수 분포</h2>
+      ${stat}
+      ${hist}
+    </section>
+    ${dirTable ? `<section class="card">${dirTable}</section>` : ""}
+    <section class="card">
+      <h3>파일 목록 <span class="muted">(행 클릭 시 열기)</span></h3>
+      <div class="tablescroll">
+        <table class="grid scan-files"><thead><tr>
+          <th data-s="path">경로${arrow("path")}</th>
+          <th data-s="nVars" class="n">유전자 수${arrow("nVars")}</th>
+          <th data-s="nObs" class="n">세포 수${arrow("nObs")}</th>
+          <th class="n">X 형식</th>
+          <th data-s="size" class="n">크기${arrow("size")}</th>
+        </tr></thead><tbody>${frows}</tbody></table>
+      </div>
+      ${pagerHTML(off, SCAN_PAGE, rows.length, "개")}
+    </section>`;
+
+  for (const th of box.querySelectorAll("th[data-s]")) {
+    th.style.cursor = "pointer";
+    th.addEventListener("click", () => {
+      const k = th.dataset.s;
+      scanRowsState.dir = scanRowsState.sort === k ? -scanRowsState.dir : 1;
+      scanRowsState.sort = k;
+      scanRowsState.offset = 0;
+      drawScan();
+    });
+  }
+  wirePager(box, off, SCAN_PAGE, rows.length, (n) => {
+    scanRowsState.offset = n;
+    drawScan();
+  });
+  for (const tr of box.querySelectorAll("tbody tr[data-path]")) {
+    tr.style.cursor = "pointer";
+    tr.addEventListener("click", () => {
+      const f = scanFileMap.get(tr.dataset.path);
+      if (f) handleFile(f);
+    });
+  }
+}
+
+function median(arr) {
+  const a = [...arr].sort((x, y) => x - y);
+  const m = a.length >> 1;
+  return a.length % 2 ? a[m] : Math.round((a[m - 1] + a[m]) / 2);
 }
 
 // ---- overview ------------------------------------------------------
@@ -1140,6 +1349,15 @@ fileInput.addEventListener("change", () => handleFile(fileInput.files[0]));
 openBtn.addEventListener("click", pickFile);
 el("filebar-change").addEventListener("click", pickFile);
 
+scanBtn.addEventListener("click", () => {
+  folderInput.value = "";
+  folderInput.click();
+});
+folderInput.addEventListener("change", () => {
+  const files = Array.from(folderInput.files || []);
+  if (files.length) scanFolder(files);
+});
+
 for (const b of topnav.querySelectorAll("button")) {
   b.addEventListener("click", () => setTab(b.dataset.tab));
 }
@@ -1173,8 +1391,15 @@ window.addEventListener("drop", (e) => {
   if (!hasFileDrag(e) && !e.dataTransfer?.files?.length) return;
   e.preventDefault();
   clearDragOverlay();
+  // grab entries synchronously — dataTransfer is cleared once the handler returns
+  const items = e.dataTransfer?.items ? Array.from(e.dataTransfer.items) : [];
+  const entries = items.map((it) => (it.webkitGetAsEntry ? it.webkitGetAsEntry() : null)).filter(Boolean);
+  if (entries.some((en) => en.isDirectory)) {
+    filesFromEntries(entries).then((files) => scanFolder(files));
+    return;
+  }
   const files = Array.from(e.dataTransfer?.files || []);
-  const f = files.find((x) => /\.(h5ad|h5|hdf5)$/i.test(x.name)) || files[0];
+  const f = files.find((x) => H5_RE.test(x.name)) || files[0];
   if (f) handleFile(f);
 });
 

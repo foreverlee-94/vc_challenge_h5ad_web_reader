@@ -404,6 +404,14 @@ table.matrix td.z { color: var(--muted); opacity: 0.4; }
 }
 .pager button:disabled { opacity: 0.35; cursor: default; }
 
+/* folder scan */
+#filecontrols #scanbtn { }
+#tab-scan .card { margin: 14px 0; }
+#tab-scan .chart { margin-top: 10px; }
+table.scan-files tbody tr { cursor: pointer; }
+table.scan-files tbody tr:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+table.grid .err { color: var(--error); }
+
 .chart { max-width: 100%; height: auto; margin: 8px 0; display: block; }
 .chart .bar { fill: var(--accent); }
 .chart .lbl, .chart .num { fill: var(--muted); font-size: 11px; font-family: var(--mono); }

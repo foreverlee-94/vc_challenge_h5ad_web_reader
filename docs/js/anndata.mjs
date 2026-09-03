@@ -294,3 +294,43 @@ export function summarize(file) {
 
   return out;
 }
+
+// Minimal read: just cell/gene counts + X format. A few KB of IO per file —
+// used by the folder scan so RAM stays flat over hundreds of files.
+export function quickShape(file) {
+  const has = (k) => safeKeys(file).includes(k);
+  let nObs = null;
+  let nVars = null;
+  let xFormat = null;
+
+  if (has("X")) {
+    const X = file.get("X");
+    if (isGroup(X)) {
+      const sh = normAttr(attr(X, "shape"));
+      if (Array.isArray(sh)) [nObs, nVars] = sh;
+      xFormat = encodingOf(X) === "csc_matrix" ? "csc" : "csr";
+    } else {
+      const sh = normAttr(X.shape) || [];
+      nObs = sh[0] ?? null;
+      nVars = sh.length > 1 ? sh[1] : sh.length === 1 ? 1 : null;
+      xFormat = "dense";
+    }
+  }
+
+  const axisLen = (axis) => {
+    if (!has(axis)) return null;
+    const g = file.get(axis);
+    const idxName = attr(g, "_index") || "_index";
+    const node = child(g, idxName);
+    const ds = node && isGroup(node) ? child(node, "values") : node;
+    try {
+      return ds ? normAttr(ds.shape)[0] : null;
+    } catch (_) {
+      return null;
+    }
+  };
+  if (nVars == null) nVars = axisLen("var");
+  if (nObs == null) nObs = axisLen("obs");
+
+  return { nObs, nVars, xFormat, encoding: attr(file, "encoding-type") || null };
+}

@@ -14,7 +14,9 @@
       </div>
       <div id="filecontrols">
         <input id="file" type="file" accept=".h5ad,.h5,.hdf5" hidden />
+        <input id="folder" type="file" webkitdirectory directory multiple hidden />
         <button id="openbtn" type="button" class="primary">파일 열기</button>
+        <button id="scanbtn" type="button">폴더 스캔</button>
         <span id="filebar" hidden>
           <span id="filebar-name" class="mono"></span>
           <span id="filebar-meta" class="muted"></span>
@@ -25,6 +27,7 @@
         <button data-tab="overview" class="active">개요</button>
         <button data-tab="explore">탐색</button>
         <button data-tab="raw">구조</button>
+        <button data-tab="scan" hidden>폴더 스캔</button>
       </nav>
     </header>
 
@@ -34,7 +37,10 @@
           단일세포 데이터 파일(<code>.h5ad</code>)의 내부 구조와 값을 브라우저에서 직접 확인.
           파일은 <strong>브라우저 내에서만</strong> 처리되며 서버로 전송되지 않음.
         </p>
-        <p class="muted">상단 <b>[파일 열기]</b> 버튼 또는 창으로 <code>.h5ad</code> 파일 드래그.</p>
+        <p class="muted">
+          상단 <b>[파일 열기]</b> 버튼 또는 창으로 <code>.h5ad</code> 파일 드래그.
+          <b>[폴더 스캔]</b> 또는 폴더 드래그 시 폴더 내 모든 <code>.h5ad</code>의 유전자 개수를 비교.
+        </p>
       </div>
 
       <p id="status" data-kind="info"></p>
@@ -42,6 +48,7 @@
 
       <section id="tab-overview" class="tab" hidden></section>
       <section id="tab-raw" class="tab" hidden></section>
+      <section id="tab-scan" class="tab" hidden></section>
     </main>
 
     <section id="tab-explore" class="tab tab-full" hidden>
