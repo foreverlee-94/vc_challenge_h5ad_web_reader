@@ -156,12 +156,19 @@ function resetViewState() {
   state.slice = null;
 }
 
+let loading = false;
+
 async function handleFile(file) {
   if (!file) return;
   if (!/\.h5ad$|\.h5$|\.hdf5$/i.test(file.name)) {
-    setStatus(`".h5ad" 파일을 선택해 주세요 (받은 파일: ${file.name})`, "warn");
+    setStatus(`.h5ad / .h5 / .hdf5 파일을 선택해 주세요 (받은 파일: ${file.name})`, "warn");
     return;
   }
+  if (loading) {
+    setStatus(`이전 파일을 여는 중입니다 — 잠시 후 다시 시도하세요.`, "warn");
+    return;
+  }
+  loading = true;
   for (const t of Object.values(tabs)) t.hidden = true;
   tabs.overview.innerHTML = "";
   tabs.raw.innerHTML = "";
@@ -189,11 +196,13 @@ async function handleFile(file) {
     buildOverviewTab(info, ms);
     buildRawTab(info.tree);
     state.path = [];
-    state.view = null;
+    resetViewState();
     await buildExploreTab();
     setTab(state.tab === "explore" ? "explore" : "overview");
   } catch (err) {
     setStatus(`열기 실패: ${err && err.message ? err.message : err}`, "error");
+  } finally {
+    loading = false;
   }
 }
 
@@ -1135,25 +1144,37 @@ for (const b of topnav.querySelectorAll("button")) {
   b.addEventListener("click", () => setTab(b.dataset.tab));
 }
 
-// drag & drop anywhere on the window
-let dragDepth = 0;
-window.addEventListener("dragenter", (e) => {
-  e.preventDefault();
-  if (dragDepth++ === 0) document.body.classList.add("dragging");
-});
-window.addEventListener("dragover", (e) => e.preventDefault());
-window.addEventListener("dragleave", (e) => {
-  e.preventDefault();
-  if (--dragDepth <= 0) {
-    dragDepth = 0;
-    document.body.classList.remove("dragging");
-  }
-});
-window.addEventListener("drop", (e) => {
-  e.preventDefault();
-  dragDepth = 0;
+// Drop a file anywhere on the window to open it — also while one is already
+// loaded (it reloads with the dropped file). Uses a re-armed timer instead of
+// an enter/leave counter so the overlay never gets stuck.
+let dragHideTimer = 0;
+const hasFileDrag = (e) => Array.from(e.dataTransfer?.types || []).includes("Files");
+
+function armDragOverlay() {
+  document.body.classList.add("dragging");
+  clearTimeout(dragHideTimer);
+  dragHideTimer = setTimeout(() => document.body.classList.remove("dragging"), 150);
+}
+function clearDragOverlay() {
+  clearTimeout(dragHideTimer);
   document.body.classList.remove("dragging");
-  const f = e.dataTransfer?.files?.[0];
+}
+
+for (const type of ["dragenter", "dragover"]) {
+  window.addEventListener(type, (e) => {
+    if (!hasFileDrag(e)) return;
+    e.preventDefault(); // required, or the browser navigates to the file
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    armDragOverlay();
+  });
+}
+window.addEventListener("dragend", clearDragOverlay);
+window.addEventListener("drop", (e) => {
+  if (!hasFileDrag(e) && !e.dataTransfer?.files?.length) return;
+  e.preventDefault();
+  clearDragOverlay();
+  const files = Array.from(e.dataTransfer?.files || []);
+  const f = files.find((x) => /\.(h5ad|h5|hdf5)$/i.test(x.name)) || files[0];
   if (f) handleFile(f);
 });
 
